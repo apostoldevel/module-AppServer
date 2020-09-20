@@ -53,12 +53,12 @@ namespace Apostol {
 
             void QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E);
 
-            static bool CheckAuthorizationData(CRequest *ARequest, CAuthorization &Authorization);
+            static bool CheckAuthorizationData(CHTTPRequest *ARequest, CAuthorization &Authorization);
 
             static int CheckError(const CJSON &Json, CString &ErrorMessage, bool RaiseIfError = false);
-            static CReply::CStatusType ErrorCodeToStatus(int ErrorCode);
+            static CHTTPReply::CStatusType ErrorCodeToStatus(int ErrorCode);
 
-            static void ReplyError(CHTTPServerConnection *AConnection, CReply::CStatusType ErrorCode, const CString &Message);
+            static void ReplyError(CHTTPServerConnection *AConnection, CHTTPReply::CStatusType ErrorCode, const CString &Message);
 
         protected:
 
@@ -94,8 +94,8 @@ namespace Apostol {
                 const CString &Session, const CString &Nonce, const CString &Signature, const CString &Agent,
                 const CString &Host, long int ReceiveWindow = 5000);
 
-            static CString GetSession(CRequest *ARequest);
-            static bool CheckSession(CRequest *ARequest, CString &Session);
+            static CString GetSession(CHTTPRequest *ARequest);
+            static bool CheckSession(CHTTPRequest *ARequest, CString &Session);
 
             static bool CacheAge(const CString &FileName);
             CString GetCacheFile(const CString &Session, const CString &Path, const CString &Payload);
