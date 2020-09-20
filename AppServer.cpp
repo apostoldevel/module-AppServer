@@ -239,28 +239,28 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::QueryException(CPQPollQuery *APollQuery, const std::exception &e) {
+        void CAppServer::QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
 
             auto LConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
 
             if (LConnection == nullptr) {
                 auto LJob = m_pJobs->FindJobByQuery(APollQuery);
                 if (LJob != nullptr) {
-                    ExceptionToJson(CReply::internal_server_error, e, LJob->Reply().Content);
+                    ExceptionToJson(CReply::internal_server_error, E, LJob->Reply().Content);
                 }
             } else {
                 auto LReply = LConnection->Reply();
 
-                ExceptionToJson(CReply::internal_server_error, e, LReply->Content);
+                ExceptionToJson(CReply::internal_server_error, E, LReply->Content);
                 LConnection->SendReply(CReply::ok, nullptr, true);
             }
 
-            Log()->Error(APP_LOG_EMERG, 0, e.what());
+            Log()->Error(APP_LOG_EMERG, 0, E.what());
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::DoPostgresQueryException(CPQPollQuery *APollQuery, Delphi::Exception::Exception *AException) {
-            QueryException(APollQuery, *AException);
+        void CAppServer::DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
+            QueryException(APollQuery, E);
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -493,8 +493,8 @@ namespace Apostol {
                 ReplyError(AConnection, CReply::bad_request, e.what());
             } catch (CAuthorizationError &e) {
                 ReplyError(AConnection, CReply::bad_request, e.what());
-            } catch (std::exception &e) {
-                ReplyError(AConnection, CReply::bad_request, e.what());
+            } catch (Delphi::Exception::Exception &E) {
+                ReplyError(AConnection, CReply::bad_request, E.what());
             }
 
             return false;
@@ -778,13 +778,13 @@ namespace Apostol {
 
                     DoFetch(AConnection, LPath);
                 }
-            } catch (std::exception &e) {
-                ExceptionToJson(CReply::bad_request, e, LReply->Content);
+            } catch (Delphi::Exception::Exception &E) {
+                ExceptionToJson(CReply::bad_request, E, LReply->Content);
 
                 AConnection->CloseConnection(true);
                 AConnection->SendReply(CReply::ok);
 
-                Log()->Error(APP_LOG_EMERG, 0, e.what());
+                Log()->Error(APP_LOG_EMERG, 0, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -847,8 +847,7 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        bool CAppServer::CheckConnection(CHTTPServerConnection *AConnection) {
-            const auto& Location = AConnection->Request()->Location;
+        bool CAppServer::CheckLocation(const CLocation &Location) {
             return Location.pathname.SubString(0, 5) == _T("/api/");
         }
         //--------------------------------------------------------------------------------------------------------------
