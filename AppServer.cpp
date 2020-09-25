@@ -493,8 +493,6 @@ namespace Apostol {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             } catch (CAuthorizationError &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
-            } catch (Delphi::Exception::Exception &E) {
-                ReplyError(AConnection, CHTTPReply::bad_request, E.what());
             } catch (std::exception &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             }
