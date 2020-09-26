@@ -136,6 +136,9 @@ namespace Apostol {
 
                 if (ErrorCode >= 10000)
                     ErrorCode = ErrorCode / 100;
+
+                if (ErrorCode < 0)
+                    ErrorCode = 400;
             }
 
             return ErrorCode;
@@ -544,8 +547,11 @@ namespace Apostol {
             AConnection->Data().Values("signature", "false");
             AConnection->Data().Values("path", Path);
 
-            if (!StartQuery(AConnection, SQL)) {
+            try {
+                StartQuery(AConnection, SQL);
+            } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
+                Log()->Error(APP_LOG_EMERG, 0, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -587,8 +593,11 @@ namespace Apostol {
             AConnection->Data().Values("signature", "false");
             AConnection->Data().Values("path", Path);
 
-            if (!StartQuery(AConnection, SQL)) {
+            try {
+                StartQuery(AConnection, SQL);
+            } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
+                Log()->Error(APP_LOG_EMERG, 0, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -614,8 +623,11 @@ namespace Apostol {
             AConnection->Data().Values("signature", "true");
             AConnection->Data().Values("path", Path);
 
-            if (!StartQuery(AConnection, SQL)) {
+            try {
+                StartQuery(AConnection, SQL);
+            } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
+                Log()->Error(APP_LOG_EMERG, 0, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
