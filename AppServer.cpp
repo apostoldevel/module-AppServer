@@ -536,7 +536,9 @@ namespace Apostol {
 
             CStringList SQL;
 
-            SQL.Add(CString().Format("SELECT * FROM daemon.unauthorized_fetch(%s, '%s'::jsonb, %s, %s);",
+            SQL.Add(CString()
+                .MaxFormatSize(256 + Path.Size() + Payload.Size() + Agent.Size())
+                .Format("SELECT * FROM daemon.unauthorized_fetch(%s, '%s'::jsonb, %s, %s);",
                                      PQQuoteLiteral(Path).c_str(),
                                      Payload.IsEmpty() ? "{}" : Payload.c_str(),
                                      PQQuoteLiteral(Agent).c_str(),
@@ -563,7 +565,9 @@ namespace Apostol {
 
             if (Authorization.Schema == CAuthorization::asBearer) {
 
-                SQL.Add(CString().Format("SELECT * FROM daemon.fetch(%s, %s, '%s'::jsonb, %s, %s);",
+                SQL.Add(CString()
+                    .MaxFormatSize(256 + Authorization.Token.Size() + Path.Size() + Payload.Size() + Agent.Size())
+                    .Format("SELECT * FROM daemon.fetch(%s, %s, '%s'::jsonb, %s, %s);",
                                          PQQuoteLiteral(Authorization.Token).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
                                          Payload.IsEmpty() ? "{}" : Payload.c_str(),
@@ -573,7 +577,9 @@ namespace Apostol {
 
             } else if (Authorization.Schema == CAuthorization::asBasic) {
 
-                SQL.Add(CString().Format("SELECT * FROM daemon.%s_fetch(%s, %s, %s, '%s'::jsonb, %s, %s);",
+                SQL.Add(CString()
+                    .MaxFormatSize(256 + Path.Size() + Payload.Size() + Agent.Size())
+                    .Format("SELECT * FROM daemon.%s_fetch(%s, %s, %s, '%s'::jsonb, %s, %s);",
                                          Authorization.Type == CAuthorization::atSession ? "session" : "authorized",
                                          PQQuoteLiteral(Authorization.Username).c_str(),
                                          PQQuoteLiteral(Authorization.Password).c_str(),
@@ -608,7 +614,9 @@ namespace Apostol {
 
             CStringList SQL;
 
-            SQL.Add(CString().Format("SELECT * FROM daemon.signed_fetch(%s, '%s'::json, %s, %s, %s, %s, %s, INTERVAL '%d milliseconds');",
+            SQL.Add(CString()
+                .MaxFormatSize(256 + Path.Size() + Payload.Size() + Session.Size() + Nonce.Size() + Signature.Size() + Agent.Size())
+                .Format("SELECT * FROM daemon.signed_fetch(%s, '%s'::json, %s, %s, %s, %s, %s, INTERVAL '%d milliseconds');",
                                      PQQuoteLiteral(Path).c_str(),
                                      Payload.IsEmpty() ? "{}" : Payload.c_str(),
                                      PQQuoteLiteral(Session).c_str(),
