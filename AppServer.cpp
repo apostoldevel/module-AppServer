@@ -42,7 +42,7 @@ namespace Apostol {
 
         //--------------------------------------------------------------------------------------------------------------
 
-        CAppServer::CAppServer(CModuleProcess *AProcess) : CApostolModule(AProcess, "application server") {
+        CAppServer::CAppServer(CModuleProcess *AProcess) : CApostolModule(AProcess, "application server", "worker/AppServer") {
             m_Headers.Add("Authorization");
             m_Headers.Add("Session");
             m_Headers.Add("Secret");
@@ -532,7 +532,7 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Path, const CString &Payload,
-                                            const CString &Agent, const CString &Host) {
+            const CString &Agent, const CString &Host) {
 
             CStringList SQL;
 
@@ -559,7 +559,7 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::AuthorizedFetch(CHTTPServerConnection *AConnection, const CAuthorization &Authorization,
-                                          const CString &Path, const CString &Payload, const CString &Agent, const CString &Host) {
+            const CString &Path, const CString &Payload, const CString &Agent, const CString &Host) {
 
             CStringList SQL;
 
@@ -609,8 +609,8 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::SignedFetch(CHTTPServerConnection *AConnection, const CString &Path, const CString &Payload,
-                                      const CString &Session, const CString &Nonce, const CString &Signature, const CString &Agent,
-                                      const CString &Host, long int ReceiveWindow) {
+            const CString &Session, const CString &Nonce, const CString &Signature, const CString &Agent,
+            const CString &Host, long int ReceiveWindow) {
 
             CStringList SQL;
 
@@ -864,7 +864,7 @@ namespace Apostol {
 
         bool CAppServer::Enabled() {
             if (m_ModuleStatus == msUnknown)
-                m_ModuleStatus = Config()->IniFile().ReadBool("worker/AppServer", "enable", true) ? msEnabled : msDisabled;
+                m_ModuleStatus = Config()->IniFile().ReadBool(SectionName(), "enable", true) ? msEnabled : msDisabled;
             return m_ModuleStatus == msEnabled;
         }
         //--------------------------------------------------------------------------------------------------------------
