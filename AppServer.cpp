@@ -693,22 +693,6 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::ReplyError(CHTTPServerConnection *AConnection, CHTTPReply::CStatusType ErrorCode, const CString &Message) {
-            auto LReply = AConnection->Reply();
-
-            LReply->ContentType = CHTTPReply::json;
-
-            if (ErrorCode == CHTTPReply::unauthorized) {
-                CHTTPReply::AddUnauthorized(LReply, AConnection->Data()["Authorization"] != "Basic", "invalid_client", Message.c_str());
-            }
-
-            LReply->Content.Clear();
-            LReply->Content.Format(R"({"error": {"code": %u, "message": "%s"}})", ErrorCode, Delphi::Json::EncodeJsonString(Message).c_str());
-
-            AConnection->SendReply(ErrorCode, nullptr, true);
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
         void CAppServer::DoGet(CHTTPServerConnection *AConnection) {
             auto LRequest = AConnection->Request();
             auto LReply = AConnection->Reply();

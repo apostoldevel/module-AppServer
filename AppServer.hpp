@@ -58,8 +58,6 @@ namespace Apostol {
             static int CheckError(const CJSON &Json, CString &ErrorMessage, bool RaiseIfError = false);
             static CHTTPReply::CStatusType ErrorCodeToStatus(int ErrorCode);
 
-            static void ReplyError(CHTTPServerConnection *AConnection, CHTTPReply::CStatusType ErrorCode, const CString &Message);
-
         protected:
 
             void DoGet(CHTTPServerConnection *AConnection) override;
