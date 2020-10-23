@@ -163,8 +163,7 @@ namespace Apostol {
             auto LResult = APollQuery->Results(0);
 
             if (LResult->ExecStatus() != PGRES_TUPLES_OK) {
-                auto errorMessage = LResult->GetErrorMessage();
-                QueryException(APollQuery, Delphi::Exception::EDBError(errorMessage != nullptr ? errorMessage : "Unknown DataBase error."));
+                QueryException(APollQuery, Delphi::Exception::EDBError("DBError: %s", LResult->GetErrorMessage()));
                 return;
             }
 
@@ -233,9 +232,7 @@ namespace Apostol {
 
                     PQResultToJson(LResult, LReply->Content, DataArray);
                 } catch (Delphi::Exception::Exception &E) {
-                    LReply->Status = CHTTPReply::bad_request;
-                    ExceptionToJson(LReply->Status, E, LReply->Content);
-                    Log()->Error(APP_LOG_EMERG, 0, E.what());
+                    ReplyError(LConnection, CHTTPReply::bad_request, E.what());
                 }
             }
 
@@ -249,17 +246,15 @@ namespace Apostol {
 
             if (LConnection == nullptr) {
                 auto LJob = m_pJobs->FindJobByQuery(APollQuery);
+
                 if (LJob != nullptr) {
                     ExceptionToJson(CHTTPReply::internal_server_error, E, LJob->Reply().Content);
                 }
+
+                Log()->Error(APP_LOG_EMERG, 0, E.what());
             } else {
-                auto LReply = LConnection->Reply();
-
-                ExceptionToJson(CHTTPReply::internal_server_error, E, LReply->Content);
-                LConnection->SendReply(CHTTPReply::ok, nullptr, true);
+                ReplyError(LConnection, CHTTPReply::internal_server_error, E.what());
             }
-
-            Log()->Error(APP_LOG_EMERG, 0, E.what());
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -687,9 +682,7 @@ namespace Apostol {
                     SignedFetch(AConnection, Path, LPayload, LSession, LNonce, LSignature, LAgent, LHost, LReceiveWindow);
                 }
             } catch (Delphi::Exception::Exception &E) {
-                ExceptionToJson(CHTTPReply::bad_request, E, LReply->Content);
-                AConnection->SendReply(CHTTPReply::ok);
-                Log()->Error(APP_LOG_EMERG, 0, E.what());
+                ReplyError(AConnection, CHTTPReply::bad_request, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -786,12 +779,8 @@ namespace Apostol {
                     DoFetch(AConnection, LPath);
                 }
             } catch (Delphi::Exception::Exception &E) {
-                ExceptionToJson(CHTTPReply::bad_request, E, LReply->Content);
-
                 AConnection->CloseConnection(true);
-                AConnection->SendReply(CHTTPReply::ok);
-
-                Log()->Error(APP_LOG_EMERG, 0, E.what());
+                ReplyError(AConnection, CHTTPReply::bad_request, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
