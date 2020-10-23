@@ -163,7 +163,8 @@ namespace Apostol {
             auto LResult = APollQuery->Results(0);
 
             if (LResult->ExecStatus() != PGRES_TUPLES_OK) {
-                QueryException(APollQuery, Delphi::Exception::EDBError(LResult->GetErrorMessage()));
+                auto errorMessage = LResult->GetErrorMessage();
+                QueryException(APollQuery, Delphi::Exception::EDBError(errorMessage != nullptr ? errorMessage : "Unknown DataBase error."));
                 return;
             }
 
