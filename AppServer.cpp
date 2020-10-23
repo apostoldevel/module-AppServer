@@ -532,11 +532,13 @@ namespace Apostol {
 
             CStringList SQL;
 
+            const auto &payload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+
             SQL.Add(CString()
-                .MaxFormatSize(256 + Path.Size() + Payload.Size() + Agent.Size())
+                .MaxFormatSize(256 + Path.Size() + payload.Size() + Agent.Size())
                 .Format("SELECT * FROM daemon.unauthorized_fetch(%s, %s::jsonb, %s, %s);",
                                      PQQuoteLiteral(Path).c_str(),
-                                     Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload).c_str(),
+                                     payload.c_str(),
                                      PQQuoteLiteral(Agent).c_str(),
                                      PQQuoteLiteral(Host).c_str()
             ));
@@ -561,26 +563,30 @@ namespace Apostol {
 
             if (Authorization.Schema == CAuthorization::asBearer) {
 
+                const auto &payload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+
                 SQL.Add(CString()
-                    .MaxFormatSize(256 + Authorization.Token.Size() + Path.Size() + Payload.Size() + Agent.Size())
+                    .MaxFormatSize(256 + Authorization.Token.Size() + Path.Size() + payload.Size() + Agent.Size())
                     .Format("SELECT * FROM daemon.fetch(%s, %s, %s::jsonb, %s, %s);",
                                          PQQuoteLiteral(Authorization.Token).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
-                                         Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload).c_str(),
+                                         payload.c_str(),
                                          PQQuoteLiteral(Agent).c_str(),
                                          PQQuoteLiteral(Host).c_str()
                 ));
 
             } else if (Authorization.Schema == CAuthorization::asBasic) {
 
+                const auto &payload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+
                 SQL.Add(CString()
-                    .MaxFormatSize(256 + Path.Size() + Payload.Size() + Agent.Size())
+                    .MaxFormatSize(256 + Path.Size() + payload.Size() + Agent.Size())
                     .Format("SELECT * FROM daemon.%s_fetch(%s, %s, %s, %s::jsonb, %s, %s);",
                                          Authorization.Type == CAuthorization::atSession ? "session" : "authorized",
                                          PQQuoteLiteral(Authorization.Username).c_str(),
                                          PQQuoteLiteral(Authorization.Password).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
-                                         Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload).c_str(),
+                                         payload.c_str(),
                                          PQQuoteLiteral(Agent).c_str(),
                                          PQQuoteLiteral(Host).c_str()
                 ));
