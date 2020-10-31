@@ -83,46 +83,46 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         CHTTPReply::CStatusType CAppServer::ErrorCodeToStatus(int ErrorCode) {
-            CHTTPReply::CStatusType Status = CHTTPReply::ok;
+            CHTTPReply::CStatusType status = CHTTPReply::ok;
 
             if (ErrorCode != 0) {
                 switch (ErrorCode) {
                     case 401:
-                        Status = CHTTPReply::unauthorized;
+                        status = CHTTPReply::unauthorized;
                         break;
 
                     case 403:
-                        Status = CHTTPReply::forbidden;
+                        status = CHTTPReply::forbidden;
                         break;
 
                     case 404:
-                        Status = CHTTPReply::not_found;
+                        status = CHTTPReply::not_found;
                         break;
 
                     case 500:
-                        Status = CHTTPReply::internal_server_error;
+                        status = CHTTPReply::internal_server_error;
                         break;
 
                     default:
-                        Status = CHTTPReply::bad_request;
+                        status = CHTTPReply::bad_request;
                         break;
                 }
             }
 
-            return Status;
+            return status;
         }
         //--------------------------------------------------------------------------------------------------------------
 
         int CAppServer::CheckError(const CJSON &Json, CString &ErrorMessage, bool RaiseIfError) {
-            int ErrorCode = 0;
+            int errorCode = 0;
 
             if (Json.HasOwnProperty(_T("error"))) {
                 const auto& error = Json[_T("error")];
 
                 if (error.HasOwnProperty(_T("code"))) {
-                    ErrorCode = error[_T("code")].AsInteger();
+                    errorCode = error[_T("code")].AsInteger();
                 } else {
-                    ErrorCode = 40000;
+                    errorCode = 40000;
                 }
 
                 if (error.HasOwnProperty(_T("message"))) {
@@ -134,126 +134,119 @@ namespace Apostol {
                 if (RaiseIfError)
                     throw EDBError(ErrorMessage.c_str());
 
-                if (ErrorCode >= 10000)
-                    ErrorCode = ErrorCode / 100;
+                if (errorCode >= 10000)
+                    errorCode = errorCode / 100;
 
-                if (ErrorCode < 0)
-                    ErrorCode = 400;
+                if (errorCode < 0)
+                    errorCode = 400;
             }
 
-            return ErrorCode;
+            return errorCode;
         }
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::AfterQuery(CHTTPServerConnection *AConnection, const CString &Path, const CJSON &Payload) {
-
             if (Path == _T("/sign/out")) {
-
-                auto LReply = AConnection->Reply();
-
-                LReply->SetCookie(_T("SID"), _T("null"), _T("/"), -1);
-
+                auto pReply = AConnection->Reply();
+                pReply->SetCookie(_T("SID"), _T("null"), _T("/"), -1);
             }
         }
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::DoPostgresQueryExecuted(CPQPollQuery *APollQuery) {
-            clock_t start = clock();
 
-            auto LResult = APollQuery->Results(0);
+            auto pResult = APollQuery->Results(0);
 
-            if (LResult->ExecStatus() != PGRES_TUPLES_OK) {
-                QueryException(APollQuery, Delphi::Exception::EDBError("DBError: %s", LResult->GetErrorMessage()));
+            if (pResult->ExecStatus() != PGRES_TUPLES_OK) {
+                QueryException(APollQuery, Delphi::Exception::EDBError("DBError: %s", pResult->GetErrorMessage()));
                 return;
             }
 
-            CString ErrorMessage;
+            CString errorMessage;
 
-            auto LConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
+            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
 
-            if (LConnection != nullptr) {
+            if (pConnection != nullptr) {
 
-                const auto& Path = LConnection->Data()["path"].Lower();
+                const auto& Path = pConnection->Data()["path"].Lower();
                 const auto DataArray = Path.Find(_T("/list")) != CString::npos;
 
-                auto LRequest = LConnection->Request();
-                auto LReply = LConnection->Reply();
+                auto pRequest = pConnection->Request();
+                auto pReply = pConnection->Reply();
 
-                const auto& result_object = LRequest->Params[_T("result_object")];
-                const auto& data_array = LRequest->Params[_T("data_array")];
+                const auto& result_object = pRequest->Params[_T("result_object")];
+                const auto& data_array = pRequest->Params[_T("data_array")];
 
-                CHTTPReply::CStatusType LStatus = CHTTPReply::ok;
+                CHTTPReply::CStatusType status = CHTTPReply::ok;
 
                 try {
-                    if (LResult->nTuples() == 1) {
-                        const CJSON Payload(LResult->GetValue(0, 0));
-                        LStatus = ErrorCodeToStatus(CheckError(Payload, ErrorMessage));
-                        if (LStatus == CHTTPReply::ok) {
-                            AfterQuery(LConnection, Path, Payload);
+                    if (pResult->nTuples() == 1) {
+                        const CJSON Payload(pResult->GetValue(0, 0));
+                        status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
+                        if (status == CHTTPReply::ok) {
+                            AfterQuery(pConnection, Path, Payload);
                         }
                     }
 
-                    PQResultToJson(LResult, LReply->Content, data_array.IsEmpty() ? DataArray : data_array == "true", result_object == "true" ? "result" : CString());
+                    PQResultToJson(pResult, pReply->Content, data_array.IsEmpty() ? DataArray : data_array == "true", result_object == "true" ? "result" : CString());
 
-                    if (LStatus == CHTTPReply::ok && !LReply->CacheFile.IsEmpty()) {
-                        LReply->Content.SaveToFile(LReply->CacheFile.c_str());
+                    if (status == CHTTPReply::ok && !pReply->CacheFile.IsEmpty()) {
+                        pReply->Content.SaveToFile(pReply->CacheFile.c_str());
                     }
                 } catch (Delphi::Exception::Exception &E) {
-                    ErrorMessage = E.what();
-                    LStatus = CHTTPReply::bad_request;
+                    errorMessage = E.what();
+                    status = CHTTPReply::bad_request;
                     Log()->Error(APP_LOG_EMERG, 0, E.what());
                 }
 
-                if (LStatus == CHTTPReply::ok) {
-                    LConnection->SendReply(LStatus, nullptr, true);
+                if (status == CHTTPReply::ok) {
+                    pConnection->SendReply(status, nullptr, true);
                 } else {
-                    ReplyError(LConnection, LStatus, ErrorMessage);
+                    ReplyError(pConnection, status, errorMessage);
                 }
 
             } else {
 
-                auto LJob = m_pJobs->FindJobByQuery(APollQuery);
-                if (LJob == nullptr) {
+                auto pJob = m_pJobs->FindJobByQuery(APollQuery);
+                if (pJob == nullptr) {
                     Log()->Error(APP_LOG_EMERG, 0, _T("Job not found by Query."));
                     return;
                 }
 
-                const auto& Path = LJob->Data()["path"].Lower();
-                const auto DataArray = Path.Find(_T("/list")) != CString::npos;
+                const auto& caPath = pJob->Data()["path"].Lower();
+                const auto DataArray = caPath.Find(_T("/list")) != CString::npos;
 
-                auto LReply = &LJob->Reply();
-                LReply->Status = CHTTPReply::ok;
+                auto pReply = &pJob->Reply();
+                pReply->Status = CHTTPReply::ok;
 
                 try {
-                    if (LResult->nTuples() == 1) {
-                        const CJSON Payload(LResult->GetValue(0, 0));
-                        LReply->Status = ErrorCodeToStatus(CheckError(Payload, ErrorMessage));
+                    if (pResult->nTuples() == 1) {
+                        const CJSON Payload(pResult->GetValue(0, 0));
+                        pReply->Status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
                     }
 
-                    PQResultToJson(LResult, LReply->Content, DataArray);
+                    PQResultToJson(pResult, pReply->Content, DataArray);
                 } catch (Delphi::Exception::Exception &E) {
-                    ReplyError(LConnection, CHTTPReply::bad_request, E.what());
+                    ReplyError(pConnection, CHTTPReply::bad_request, E.what());
                 }
             }
-
-            log_debug1(APP_LOG_DEBUG_CORE, Log(), 0, _T("Query executed runtime: %.2f ms."), (double) ((clock() - start) / (double) CLOCKS_PER_SEC * 1000));
         }
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
 
-            auto LConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
+            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
 
-            if (LConnection == nullptr) {
-                auto LJob = m_pJobs->FindJobByQuery(APollQuery);
+            if (pConnection == nullptr) {
+                auto pJob = m_pJobs->FindJobByQuery(APollQuery);
 
-                if (LJob != nullptr) {
-                    ExceptionToJson(CHTTPReply::internal_server_error, E, LJob->Reply().Content);
+                if (pJob != nullptr) {
+                    ExceptionToJson(CHTTPReply::internal_server_error, E, pJob->Reply().Content);
                 }
 
                 Log()->Error(APP_LOG_EMERG, 0, E.what());
             } else {
-                ReplyError(LConnection, CHTTPReply::internal_server_error, E.what());
+                ReplyError(pConnection, CHTTPReply::internal_server_error, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -264,7 +257,6 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         CString CAppServer::GetSession(CHTTPRequest *ARequest) {
-
             const auto& headerSession = ARequest->Headers.Values(_T("Session"));
             const auto& cookieSession = ARequest->Cookies.Values(_T("SID"));
 
@@ -273,13 +265,12 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         bool CAppServer::CheckSession(CHTTPRequest *ARequest, CString &Session) {
+            const auto& caSession = GetSession(ARequest);
 
-            const auto& LSession = GetSession(ARequest);
-
-            if (LSession.Length() != 40)
+            if (caSession.Length() != 40)
                 return false;
 
-            Session = LSession;
+            Session = caSession;
 
             return true;
         }
@@ -300,31 +291,31 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         CString CAppServer::GetCacheFile(const CString &Session, const CString &Path, const CString &Payload) {
-            CString LCacheFile;
-            CString LData;
+            CString sCacheFile;
+            CString sData;
 
             int Index = m_CacheList.IndexOf(Path);
 
             if (Index != -1) {
 
-                LCacheFile = Config()->CachePrefix();
-                LCacheFile += Session;
-                LCacheFile += Path;
-                LCacheFile += _T("/");
+                sCacheFile = Config()->CachePrefix();
+                sCacheFile += Session;
+                sCacheFile += Path;
+                sCacheFile += _T("/");
 
-                if (!DirectoryExists(LCacheFile.c_str())) {
-                    if (!ForceDirectories(LCacheFile.c_str())) {
-                        throw EOSError(errno, "force directories (%s) failed", LCacheFile.c_str());
+                if (!DirectoryExists(sCacheFile.c_str())) {
+                    if (!ForceDirectories(sCacheFile.c_str())) {
+                        throw EOSError(errno, "force directories (%s) failed", sCacheFile.c_str());
                     }
                 }
 
-                LData = Path;
-                LData += Payload.IsEmpty() ? "null" : Payload;
+                sData = Path;
+                sData += Payload.IsEmpty() ? "null" : Payload;
 
-                LCacheFile += SHA1(LData);
+                sCacheFile += SHA1(sData);
             }
 
-            return LCacheFile;
+            return sCacheFile;
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -445,15 +436,13 @@ namespace Apostol {
 
         bool CAppServer::CheckAuthorizationData(CHTTPRequest *ARequest, CAuthorization &Authorization) {
 
-            const auto &LHeaders = ARequest->Headers;
-            const auto &LCookies = ARequest->Cookies;
+            const auto &caHeaders = ARequest->Headers;
+            const auto &caAuthorization = caHeaders.Values(_T("Authorization"));
 
-            const auto &LAuthorization = LHeaders.Values(_T("Authorization"));
+            if (caAuthorization.IsEmpty()) {
 
-            if (LAuthorization.IsEmpty()) {
-
-                const auto &headerSession = LHeaders.Values(_T("Session"));
-                const auto &headerSecret = LHeaders.Values(_T("Secret"));
+                const auto &headerSession = caHeaders.Values(_T("Session"));
+                const auto &headerSecret = caHeaders.Values(_T("Secret"));
 
                 Authorization.Username = headerSession;
                 Authorization.Password = headerSecret;
@@ -465,7 +454,7 @@ namespace Apostol {
                 Authorization.Type = CAuthorization::atSession;
 
             } else {
-                Authorization << LAuthorization;
+                Authorization << caAuthorization;
             }
 
             return true;
@@ -474,10 +463,10 @@ namespace Apostol {
 
         bool CAppServer::CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization) {
 
-            auto LRequest = AConnection->Request();
+            auto pRequest = AConnection->Request();
 
             try {
-                if (CheckAuthorizationData(LRequest, Authorization)) {
+                if (CheckAuthorizationData(pRequest, Authorization)) {
                     if (Authorization.Schema == CAuthorization::asBearer) {
                         Authorization.Token = VerifyToken(Authorization.Token);
                         return true;
@@ -521,10 +510,10 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::UpdateCacheList() {
-            CString LFile;
-            LFile = Config()->Prefix() + _T("cache.conf");
-            if (FileExists(LFile.c_str())) {
-                m_CacheList.LoadFromFile(LFile.c_str());
+            CString sFile;
+            sFile = Config()->Prefix() + _T("cache.conf");
+            if (FileExists(sFile.c_str())) {
+                m_CacheList.LoadFromFile(sFile.c_str());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -534,13 +523,13 @@ namespace Apostol {
 
             CStringList SQL;
 
-            const auto &payload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+            const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
 
             SQL.Add(CString()
-                .MaxFormatSize(256 + Path.Size() + payload.Size() + Agent.Size())
+                .MaxFormatSize(256 + Path.Size() + caPayload.Size() + Agent.Size())
                 .Format("SELECT * FROM daemon.unauthorized_fetch(%s, %s::jsonb, %s, %s);",
                                      PQQuoteLiteral(Path).c_str(),
-                                     payload.c_str(),
+                                     caPayload.c_str(),
                                      PQQuoteLiteral(Agent).c_str(),
                                      PQQuoteLiteral(Host).c_str()
             ));
@@ -565,30 +554,30 @@ namespace Apostol {
 
             if (Authorization.Schema == CAuthorization::asBearer) {
 
-                const auto &payload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+                const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
 
                 SQL.Add(CString()
-                    .MaxFormatSize(256 + Authorization.Token.Size() + Path.Size() + payload.Size() + Agent.Size())
+                    .MaxFormatSize(256 + Authorization.Token.Size() + Path.Size() + caPayload.Size() + Agent.Size())
                     .Format("SELECT * FROM daemon.fetch(%s, %s, %s::jsonb, %s, %s);",
                                          PQQuoteLiteral(Authorization.Token).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
-                                         payload.c_str(),
+                                         caPayload.c_str(),
                                          PQQuoteLiteral(Agent).c_str(),
                                          PQQuoteLiteral(Host).c_str()
                 ));
 
             } else if (Authorization.Schema == CAuthorization::asBasic) {
 
-                const auto &payload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+                const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
 
                 SQL.Add(CString()
-                    .MaxFormatSize(256 + Path.Size() + payload.Size() + Agent.Size())
+                    .MaxFormatSize(256 + Path.Size() + caPayload.Size() + Agent.Size())
                     .Format("SELECT * FROM daemon.%s_fetch(%s, %s, %s, %s::jsonb, %s, %s);",
                                          Authorization.Type == CAuthorization::atSession ? "session" : "authorized",
                                          PQQuoteLiteral(Authorization.Username).c_str(),
                                          PQQuoteLiteral(Authorization.Password).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
-                                         payload.c_str(),
+                                         caPayload.c_str(),
                                          PQQuoteLiteral(Agent).c_str(),
                                          PQQuoteLiteral(Host).c_str()
                 ));
@@ -646,48 +635,48 @@ namespace Apostol {
 
         void CAppServer::DoFetch(CHTTPServerConnection *AConnection, const CString &Path) {
 
-            auto LRequest = AConnection->Request();
-            auto LReply = AConnection->Reply();
+            auto pRequest = AConnection->Request();
+            auto pReply = AConnection->Reply();
 
-            const auto& LContentType = LRequest->Headers.Values(_T("Content-Type")).Lower();
-            const auto LContentJson = (LContentType.Find(_T("application/json")) != CString::npos);
+            const auto& caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
+            const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
 
             CJSON Json;
-            if (!LContentJson) {
-                ContentToJson(LRequest, Json);
+            if (!bContentJson) {
+                ContentToJson(pRequest, Json);
             }
 
-            const auto& LPayload = LContentJson ? LRequest->Content : Json.ToString();
-            const auto& LSignature = LRequest->Headers.Values(_T("Signature"));
+            const auto& caPayload = bContentJson ? pRequest->Content : Json.ToString();
+            const auto& caSignature = pRequest->Headers.Values(_T("Signature"));
 
-            const auto& LAgent = GetUserAgent(AConnection);
-            const auto& LHost = GetHost(AConnection);
+            const auto& caAgent = GetUserAgent(AConnection);
+            const auto& caHost = GetHost(AConnection);
 
             try {
-                if (LSignature.IsEmpty()) {
-                    CAuthorization LAuthorization;
-                    if (CheckAuthorization(AConnection, LAuthorization)) {
-                        CString LSession;
-                        if (CheckSession(LRequest, LSession)) {
-                            LReply->CacheFile = GetCacheFile(LSession, Path, LPayload);
-                            if (CacheAge(LReply->CacheFile)) {
-                                LReply->Content.LoadFromFile(LReply->CacheFile);
+                if (caSignature.IsEmpty()) {
+                    CAuthorization cAuthorization;
+                    if (CheckAuthorization(AConnection, cAuthorization)) {
+                        CString sSession;
+                        if (CheckSession(pRequest, sSession)) {
+                            pReply->CacheFile = GetCacheFile(sSession, Path, caPayload);
+                            if (CacheAge(pReply->CacheFile)) {
+                                pReply->Content.LoadFromFile(pReply->CacheFile);
                                 AConnection->SendReply(CHTTPReply::ok);
                                 return;
                             }
                         }
-                        AuthorizedFetch(AConnection, LAuthorization, Path, LPayload, LAgent, LHost);
+                        AuthorizedFetch(AConnection, cAuthorization, Path, caPayload, caAgent, caHost);
                     }
                 } else {
-                    const auto& LSession = GetSession(LRequest);
-                    const auto& LNonce = LRequest->Headers.Values(_T("Nonce"));
+                    const auto& caSession = GetSession(pRequest);
+                    const auto& caNonce = pRequest->Headers.Values(_T("Nonce"));
 
-                    long int LReceiveWindow = 5000;
-                    const auto& receiveWindow = LRequest->Params[_T("receive_window")];
-                    if (!receiveWindow.IsEmpty())
-                        LReceiveWindow = StrToIntDef(receiveWindow.c_str(), LReceiveWindow);
+                    long int receiveWindow = 5000;
+                    const auto& caReceiveWindow = pRequest->Params[_T("receive_window")];
+                    if (!caReceiveWindow.IsEmpty())
+                        receiveWindow = StrToIntDef(caReceiveWindow.c_str(), receiveWindow);
 
-                    SignedFetch(AConnection, Path, LPayload, LSession, LNonce, LSignature, LAgent, LHost, LReceiveWindow);
+                    SignedFetch(AConnection, Path, caPayload, caSession, caNonce, caSignature, caAgent, caHost, receiveWindow);
                 }
             } catch (Delphi::Exception::Exception &E) {
                 ReplyError(AConnection, CHTTPReply::bad_request, E.what());
@@ -696,95 +685,96 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::DoGet(CHTTPServerConnection *AConnection) {
-            auto LRequest = AConnection->Request();
-            auto LReply = AConnection->Reply();
 
-            LReply->ContentType = CHTTPReply::json;
+            auto pRequest = AConnection->Request();
+            auto pReply = AConnection->Reply();
 
-            CStringList LRouts;
-            SplitColumns(LRequest->Location.pathname, LRouts, '/');
+            pReply->ContentType = CHTTPReply::json;
 
-            if (LRouts.Count() < 3) {
+            CStringList cRouts;
+            SplitColumns(pRequest->Location.pathname, cRouts, '/');
+
+            if (cRouts.Count() < 3) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
-            const auto& LService = LRouts[0].Lower();
-            const auto& LVersion = LRouts[1].Lower();
-            const auto& LCommand = LRouts[2].Lower();
+            const auto& caService = cRouts[0].Lower();
+            const auto& caVersion = cRouts[1].Lower();
+            const auto& caCommand = cRouts[2].Lower();
 
-            if (LVersion == "v1") {
+            if (caVersion == "v1") {
                 m_Version = 1;
-            } else if (LVersion == "v2") {
+            } else if (caVersion == "v2") {
                 m_Version = 2;
             }
 
-            if (LService != "api" || (m_Version == -1)) {
+            if (caService != "api" || (m_Version == -1)) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
             try {
-                if (LCommand == "ping") {
+                if (caCommand == "ping") {
 
                     AConnection->SendStockReply(CHTTPReply::ok);
 
-                } else if (LCommand == "time") {
+                } else if (caCommand == "time") {
 
-                    LReply->Content << "{\"serverTime\": " << LongToString(MsEpoch()) << "}";
+                    pReply->Content << "{\"serverTime\": " << LongToString(MsEpoch()) << "}";
 
                     AConnection->SendReply(CHTTPReply::ok);
 
                 } else if (m_Version == 2) {
 
-                    if (LRouts.Count() != 3) {
+                    if (cRouts.Count() != 3) {
                         AConnection->SendStockReply(CHTTPReply::bad_request);
                         return;
                     }
 
-                    const auto& Identity = LRouts[2];
+                    const auto& Identity = cRouts[2];
 
                     if (Identity.Length() != APOSTOL_MODULE_UID_LENGTH) {
                         AConnection->SendStockReply(CHTTPReply::bad_request);
                         return;
                     }
 
-                    auto LJob = m_pJobs->FindJobById(Identity);
+                    auto pJob = m_pJobs->FindJobById(Identity);
 
-                    if (LJob == nullptr) {
+                    if (pJob == nullptr) {
                         AConnection->SendStockReply(CHTTPReply::not_found);
                         return;
                     }
 
-                    if (LJob->Reply().Content.IsEmpty()) {
+                    if (pJob->Reply().Content.IsEmpty()) {
                         AConnection->SendStockReply(CHTTPReply::no_content);
                         return;
                     }
 
-                    LReply->Content = LJob->Reply().Content;
+                    pReply->Content = pJob->Reply().Content;
 
-                    CHTTPReply::GetReply(LReply, CHTTPReply::ok);
+                    CHTTPReply::GetReply(pReply, CHTTPReply::ok);
 
-                    LReply->Headers << LJob->Reply().Headers;
+                    pReply->Headers << pJob->Reply().Headers;
 
                     AConnection->SendReply();
 
-                    delete LJob;
+                    delete pJob;
 
                 } else {
 
-                    CString LPath;
-                    for (int I = 2; I < LRouts.Count(); ++I) {
-                        LPath.Append('/');
-                        LPath.Append(LRouts[I].Lower());
+                    CString sPath;
+                    for (int I = 2; I < cRouts.Count(); ++I) {
+                        sPath.Append('/');
+                        sPath.Append(cRouts[I].Lower());
                     }
 
-                    if (LPath.IsEmpty()) {
+                    if (sPath.IsEmpty()) {
                         AConnection->SendStockReply(CHTTPReply::not_found);
                         return;
                     }
 
-                    DoFetch(AConnection, LPath);
+                    DoFetch(AConnection, sPath);
                 }
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->CloseConnection(true);
@@ -795,42 +785,42 @@ namespace Apostol {
 
         void CAppServer::DoPost(CHTTPServerConnection *AConnection) {
 
-            auto LRequest = AConnection->Request();
-            auto LReply = AConnection->Reply();
+            auto pRequest = AConnection->Request();
+            auto pReply = AConnection->Reply();
 
-            LReply->ContentType = CHTTPReply::json;
+            pReply->ContentType = CHTTPReply::json;
 
-            CStringList LRouts;
-            SplitColumns(LRequest->Location.pathname, LRouts, '/');
+            CStringList cRouts;
+            SplitColumns(pRequest->Location.pathname, cRouts, '/');
 
-            if (LRouts.Count() < 2) {
+            if (cRouts.Count() < 2) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
-            if (LRouts[1] == _T("v1")) {
+            if (cRouts[1] == _T("v1")) {
                 m_Version = 1;
-            } else if (LRouts[1] == _T("v2")) {
+            } else if (cRouts[1] == _T("v2")) {
                 m_Version = 2;
             }
 
-            if (LRouts[0] != _T("api") || (m_Version == -1)) {
+            if (cRouts[0] != _T("api") || (m_Version == -1)) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
-            CString LPath;
-            for (int I = 2; I < LRouts.Count(); ++I) {
-                LPath.Append('/');
-                LPath.Append(LRouts[I].Lower());
+            CString sPath;
+            for (int I = 2; I < cRouts.Count(); ++I) {
+                sPath.Append('/');
+                sPath.Append(cRouts[I].Lower());
             }
 
-            if (LPath.IsEmpty()) {
+            if (sPath.IsEmpty()) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
-            DoFetch(AConnection, LPath);
+            DoFetch(AConnection, sPath);
         }
         //--------------------------------------------------------------------------------------------------------------
 
