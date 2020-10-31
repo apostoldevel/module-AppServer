@@ -654,8 +654,8 @@ namespace Apostol {
 
             try {
                 if (caSignature.IsEmpty()) {
-                    CAuthorization cAuthorization;
-                    if (CheckAuthorization(AConnection, cAuthorization)) {
+                    CAuthorization Authorization;
+                    if (CheckAuthorization(AConnection, Authorization)) {
                         CString sSession;
                         if (CheckSession(pRequest, sSession)) {
                             pReply->CacheFile = GetCacheFile(sSession, Path, caPayload);
@@ -665,7 +665,7 @@ namespace Apostol {
                                 return;
                             }
                         }
-                        AuthorizedFetch(AConnection, cAuthorization, Path, caPayload, caAgent, caHost);
+                        AuthorizedFetch(AConnection, Authorization, Path, caPayload, caAgent, caHost);
                     }
                 } else {
                     const auto& caSession = GetSession(pRequest);
