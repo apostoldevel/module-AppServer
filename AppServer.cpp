@@ -518,25 +518,27 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Path, const CString &Payload,
-            const CString &Agent, const CString &Host) {
+        void CAppServer::UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
+                const CString &Payload, const CString &Agent, const CString &Host) {
 
             CStringList SQL;
 
             const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
 
             SQL.Add(CString()
-                .MaxFormatSize(256 + Path.Size() + caPayload.Size() + Agent.Size())
-                .Format("SELECT * FROM daemon.unauthorized_fetch(%s, %s::jsonb, %s, %s);",
+                .MaxFormatSize(256 + Method.Size() + Path.Size() + caPayload.Size() + Agent.Size())
+                .Format("SELECT * FROM daemon.unauthorized_fetch(%s, %s, %s::jsonb, %s, %s);",
+                                     PQQuoteLiteral(Method).c_str(),
                                      PQQuoteLiteral(Path).c_str(),
                                      caPayload.c_str(),
                                      PQQuoteLiteral(Agent).c_str(),
                                      PQQuoteLiteral(Host).c_str()
             ));
 
+            AConnection->Data().Values("method", Method);
+            AConnection->Data().Values("path", Path);
             AConnection->Data().Values("authorized", "false");
             AConnection->Data().Values("signature", "false");
-            AConnection->Data().Values("path", Path);
 
             try {
                 StartQuery(AConnection, SQL);
@@ -548,7 +550,7 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::AuthorizedFetch(CHTTPServerConnection *AConnection, const CAuthorization &Authorization,
-            const CString &Path, const CString &Payload, const CString &Agent, const CString &Host) {
+                const CString &Method, const CString &Path, const CString &Payload, const CString &Agent, const CString &Host) {
 
             CStringList SQL;
 
@@ -557,9 +559,10 @@ namespace Apostol {
                 const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
 
                 SQL.Add(CString()
-                    .MaxFormatSize(256 + Authorization.Token.Size() + Path.Size() + caPayload.Size() + Agent.Size())
-                    .Format("SELECT * FROM daemon.fetch(%s, %s, %s::jsonb, %s, %s);",
+                    .MaxFormatSize(256 + Authorization.Token.Size() + Method.Size() + Path.Size() + caPayload.Size() + Agent.Size())
+                    .Format("SELECT * FROM daemon.fetch(%s, %s, %s, %s::jsonb, %s, %s);",
                                          PQQuoteLiteral(Authorization.Token).c_str(),
+                                         PQQuoteLiteral(Method).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
                                          caPayload.c_str(),
                                          PQQuoteLiteral(Agent).c_str(),
@@ -571,11 +574,12 @@ namespace Apostol {
                 const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
 
                 SQL.Add(CString()
-                    .MaxFormatSize(256 + Path.Size() + caPayload.Size() + Agent.Size())
-                    .Format("SELECT * FROM daemon.%s_fetch(%s, %s, %s, %s::jsonb, %s, %s);",
+                    .MaxFormatSize(256 + Method.Size() + Path.Size() + caPayload.Size() + Agent.Size())
+                    .Format("SELECT * FROM daemon.%s_fetch(%s, %s, %s, %s, %s::jsonb, %s, %s);",
                                          Authorization.Type == CAuthorization::atSession ? "session" : "authorized",
                                          PQQuoteLiteral(Authorization.Username).c_str(),
                                          PQQuoteLiteral(Authorization.Password).c_str(),
+                                         PQQuoteLiteral(Method).c_str(),
                                          PQQuoteLiteral(Path).c_str(),
                                          caPayload.c_str(),
                                          PQQuoteLiteral(Agent).c_str(),
@@ -584,13 +588,14 @@ namespace Apostol {
 
             } else {
 
-                return UnauthorizedFetch(AConnection, Path, Payload, Agent, Host);
+                return UnauthorizedFetch(AConnection, Method, Path, Payload, Agent, Host);
 
             }
 
+            AConnection->Data().Values("method", Method);
+            AConnection->Data().Values("path", Path);
             AConnection->Data().Values("authorized", "true");
             AConnection->Data().Values("signature", "false");
-            AConnection->Data().Values("path", Path);
 
             try {
                 StartQuery(AConnection, SQL);
@@ -601,17 +606,20 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::SignedFetch(CHTTPServerConnection *AConnection, const CString &Path, const CString &Payload,
-            const CString &Session, const CString &Nonce, const CString &Signature, const CString &Agent,
-            const CString &Host, long int ReceiveWindow) {
+        void CAppServer::SignedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
+                const CString &Payload, const CString &Session, const CString &Nonce, const CString &Signature,
+                const CString &Agent, const CString &Host, long int ReceiveWindow) {
 
             CStringList SQL;
 
+            const auto &caPayload = Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload);
+
             SQL.Add(CString()
-                .MaxFormatSize(256 + Path.Size() + Payload.Size() + Session.Size() + Nonce.Size() + Signature.Size() + Agent.Size())
-                .Format("SELECT * FROM daemon.signed_fetch(%s, %s::json, %s, %s, %s, %s, %s, INTERVAL '%d milliseconds');",
+                .MaxFormatSize(256 + Method.Size() + Path.Size() + caPayload.Size() + Session.Size() + Nonce.Size() + Signature.Size() + Agent.Size())
+                .Format("SELECT * FROM daemon.signed_fetch(%s, %s, %s::json, %s, %s, %s, %s, %s, INTERVAL '%d milliseconds');",
+                                     PQQuoteLiteral(Method).c_str(),
                                      PQQuoteLiteral(Path).c_str(),
-                                     Payload.IsEmpty() ? "null" : PQQuoteLiteral(Payload).c_str(),
+                                     caPayload.c_str(),
                                      PQQuoteLiteral(Session).c_str(),
                                      PQQuoteLiteral(Nonce).c_str(),
                                      PQQuoteLiteral(Signature).c_str(),
@@ -620,9 +628,10 @@ namespace Apostol {
                                      ReceiveWindow
             ));
 
+            AConnection->Data().Values("method", Method);
+            AConnection->Data().Values("path", Path);
             AConnection->Data().Values("authorized", "true");
             AConnection->Data().Values("signature", "true");
-            AConnection->Data().Values("path", Path);
 
             try {
                 StartQuery(AConnection, SQL);
@@ -633,10 +642,9 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::DoFetch(CHTTPServerConnection *AConnection, const CString &Path) {
+        void CAppServer::DoFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path) {
 
             auto pRequest = AConnection->Request();
-            auto pReply = AConnection->Reply();
 
             const auto& caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
             const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
@@ -656,16 +664,7 @@ namespace Apostol {
                 if (caSignature.IsEmpty()) {
                     CAuthorization Authorization;
                     if (CheckAuthorization(AConnection, Authorization)) {
-                        CString sSession;
-                        if (CheckSession(pRequest, sSession)) {
-                            pReply->CacheFile = GetCacheFile(sSession, Path, caPayload);
-                            if (CacheAge(pReply->CacheFile)) {
-                                pReply->Content.LoadFromFile(pReply->CacheFile);
-                                AConnection->SendReply(CHTTPReply::ok);
-                                return;
-                            }
-                        }
-                        AuthorizedFetch(AConnection, Authorization, Path, caPayload, caAgent, caHost);
+                        AuthorizedFetch(AConnection, Authorization, Method, Path, caPayload, caAgent, caHost);
                     }
                 } else {
                     const auto& caSession = GetSession(pRequest);
@@ -676,7 +675,7 @@ namespace Apostol {
                     if (!caReceiveWindow.IsEmpty())
                         receiveWindow = StrToIntDef(caReceiveWindow.c_str(), receiveWindow);
 
-                    SignedFetch(AConnection, Path, caPayload, caSession, caNonce, caSignature, caAgent, caHost, receiveWindow);
+                    SignedFetch(AConnection, Method, Path, caPayload, caSession, caNonce, caSignature, caAgent, caHost, receiveWindow);
                 }
             } catch (Delphi::Exception::Exception &E) {
                 ReplyError(AConnection, CHTTPReply::bad_request, E.what());
@@ -691,90 +690,28 @@ namespace Apostol {
 
             pReply->ContentType = CHTTPReply::json;
 
-            CStringList cRouts;
-            SplitColumns(pRequest->Location.pathname, cRouts, '/');
+            const auto &path = pRequest->Location.pathname;
 
-            if (cRouts.Count() < 3) {
-                AConnection->SendStockReply(CHTTPReply::not_found);
-                return;
-            }
-
-            const auto& caService = cRouts[0].Lower();
-            const auto& caVersion = cRouts[1].Lower();
-            const auto& caCommand = cRouts[2].Lower();
-
-            if (caVersion == "v1") {
-                m_Version = 1;
-            } else if (caVersion == "v2") {
-                m_Version = 2;
-            }
-
-            if (caService != "api" || (m_Version == -1)) {
+            if (path.IsEmpty()) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
             try {
-                if (caCommand == "ping") {
+                if (path == "/api/v1/ping") {
 
                     AConnection->SendStockReply(CHTTPReply::ok);
 
-                } else if (caCommand == "time") {
+                } else if (path == "/api/v1/time") {
 
                     pReply->Content << "{\"serverTime\": " << LongToString(MsEpoch()) << "}";
 
                     AConnection->SendReply(CHTTPReply::ok);
 
-                } else if (m_Version == 2) {
-
-                    if (cRouts.Count() != 3) {
-                        AConnection->SendStockReply(CHTTPReply::bad_request);
-                        return;
-                    }
-
-                    const auto& Identity = cRouts[2];
-
-                    if (Identity.Length() != APOSTOL_MODULE_UID_LENGTH) {
-                        AConnection->SendStockReply(CHTTPReply::bad_request);
-                        return;
-                    }
-
-                    auto pJob = m_pJobs->FindJobById(Identity);
-
-                    if (pJob == nullptr) {
-                        AConnection->SendStockReply(CHTTPReply::not_found);
-                        return;
-                    }
-
-                    if (pJob->Reply().Content.IsEmpty()) {
-                        AConnection->SendStockReply(CHTTPReply::no_content);
-                        return;
-                    }
-
-                    pReply->Content = pJob->Reply().Content;
-
-                    CHTTPReply::GetReply(pReply, CHTTPReply::ok);
-
-                    pReply->Headers << pJob->Reply().Headers;
-
-                    AConnection->SendReply();
-
-                    delete pJob;
-
                 } else {
 
-                    CString sPath;
-                    for (int I = 2; I < cRouts.Count(); ++I) {
-                        sPath.Append('/');
-                        sPath.Append(cRouts[I].Lower());
-                    }
+                    DoFetch(AConnection, "GET", path);
 
-                    if (sPath.IsEmpty()) {
-                        AConnection->SendStockReply(CHTTPReply::not_found);
-                        return;
-                    }
-
-                    DoFetch(AConnection, sPath);
                 }
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->CloseConnection(true);
@@ -790,37 +727,14 @@ namespace Apostol {
 
             pReply->ContentType = CHTTPReply::json;
 
-            CStringList cRouts;
-            SplitColumns(pRequest->Location.pathname, cRouts, '/');
+            const auto &path = pRequest->Location.pathname;
 
-            if (cRouts.Count() < 2) {
+            if (path.IsEmpty()) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
                 return;
             }
 
-            if (cRouts[1] == _T("v1")) {
-                m_Version = 1;
-            } else if (cRouts[1] == _T("v2")) {
-                m_Version = 2;
-            }
-
-            if (cRouts[0] != _T("api") || (m_Version == -1)) {
-                AConnection->SendStockReply(CHTTPReply::not_found);
-                return;
-            }
-
-            CString sPath;
-            for (int I = 2; I < cRouts.Count(); ++I) {
-                sPath.Append('/');
-                sPath.Append(cRouts[I].Lower());
-            }
-
-            if (sPath.IsEmpty()) {
-                AConnection->SendStockReply(CHTTPReply::not_found);
-                return;
-            }
-
-            DoFetch(AConnection, sPath);
+            DoFetch(AConnection, "POST", path);
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -828,7 +742,7 @@ namespace Apostol {
             auto now = Now();
 
             if ((now >= m_FixedDate)) {
-                m_FixedDate = now + (CDateTime) 30 * 60 / SecsPerDay; // 30 min
+                m_FixedDate = now + (CDateTime) 30 / MinsPerDay; // 30 min
                 LoadCerts();
             }
         }

@@ -63,7 +63,7 @@ namespace Apostol {
             void DoGet(CHTTPServerConnection *AConnection) override;
             void DoPost(CHTTPServerConnection *AConnection);
 
-            void DoFetch(CHTTPServerConnection *AConnection, const CString& Path);
+            void DoFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path);
 
             void DoPostgresQueryExecuted(CPQPollQuery *APollQuery) override;
             void DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) override;
@@ -82,15 +82,15 @@ namespace Apostol {
 
             bool CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization);
 
-            void UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Path, const CString &Payload,
-                const CString &Agent, const CString &Host);
+            void UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
+                const CString &Payload, const CString &Agent, const CString &Host);
 
             void AuthorizedFetch(CHTTPServerConnection *AConnection, const CAuthorization &Authorization,
-                const CString &Path, const CString &Payload, const CString &Agent, const CString &Host);
+                const CString &Method, const CString &Path, const CString &Payload, const CString &Agent, const CString &Host);
 
-            void SignedFetch(CHTTPServerConnection *AConnection, const CString &Path, const CString &Payload,
-                const CString &Session, const CString &Nonce, const CString &Signature, const CString &Agent,
-                const CString &Host, long int ReceiveWindow = 5000);
+            void SignedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
+                const CString &Payload, const CString &Session, const CString &Nonce, const CString &Signature,
+                const CString &Agent, const CString &Host, long int ReceiveWindow = 5000);
 
             static CString GetSession(CHTTPRequest *ARequest);
             static bool CheckSession(CHTTPRequest *ARequest, CString &Session);
