@@ -204,50 +204,13 @@ namespace Apostol {
                 } else {
                     ReplyError(pConnection, status, errorMessage);
                 }
-
-            } else {
-
-                auto pJob = m_pJobs->FindJobByQuery(APollQuery);
-                if (pJob == nullptr) {
-                    Log()->Error(APP_LOG_EMERG, 0, _T("Job not found by Query."));
-                    return;
-                }
-
-                const auto& caPath = pJob->Data()["path"].Lower();
-                const auto DataArray = caPath.Find(_T("/list")) != CString::npos;
-
-                auto pReply = &pJob->Reply();
-                pReply->Status = CHTTPReply::ok;
-
-                try {
-                    if (pResult->nTuples() == 1) {
-                        const CJSON Payload(pResult->GetValue(0, 0));
-                        pReply->Status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
-                    }
-
-                    PQResultToJson(pResult, pReply->Content, DataArray);
-                } catch (Delphi::Exception::Exception &E) {
-                    ReplyError(pConnection, CHTTPReply::bad_request, E.what());
-                }
             }
         }
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
-
             auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
-
-            if (pConnection == nullptr) {
-                auto pJob = m_pJobs->FindJobByQuery(APollQuery);
-
-                if (pJob != nullptr) {
-                    ExceptionToJson(CHTTPReply::internal_server_error, E, pJob->Reply().Content);
-                }
-
-                Log()->Error(APP_LOG_EMERG, 0, E.what());
-            } else {
-                ReplyError(pConnection, CHTTPReply::internal_server_error, E.what());
-            }
+            ReplyError(pConnection, CHTTPReply::internal_server_error, E.what());
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -541,7 +504,7 @@ namespace Apostol {
             AConnection->Data().Values("signature", "false");
 
             try {
-                StartQuery(AConnection, SQL);
+                ExecSQL(SQL, AConnection);
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
                 Log()->Error(APP_LOG_EMERG, 0, E.what());
@@ -598,7 +561,7 @@ namespace Apostol {
             AConnection->Data().Values("signature", "false");
 
             try {
-                StartQuery(AConnection, SQL);
+                ExecSQL(SQL, AConnection);
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
                 Log()->Error(APP_LOG_EMERG, 0, E.what());
@@ -634,7 +597,7 @@ namespace Apostol {
             AConnection->Data().Values("signature", "true");
 
             try {
-                StartQuery(AConnection, SQL);
+                ExecSQL(SQL, AConnection);
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
                 Log()->Error(APP_LOG_EMERG, 0, E.what());
