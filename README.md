@@ -266,6 +266,6 @@ GET /api/v1/time
 
 **Полное описание конечных точек смотрите в репозитории вашего проекта**:
 
-- [ShipSafety](https://github.com/ufocomp/apostol-sss/blob/master/doc/REST-API-ru.md)
+- [Ship Safety ERP](https://github.com/ufocomp/apostol-serp/blob/master/doc/REST-API-ru.md)
 - [Plugme](https://github.com/ufocomp/apostol-plugme/blob/master/doc/REST-API-ru.md)
 - [Fenomy](https://github.com/ufocomp/apostol-fenomy/blob/master/doc/REST-API-ru.md)
