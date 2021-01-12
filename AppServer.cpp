@@ -196,7 +196,7 @@ namespace Apostol {
                 } catch (Delphi::Exception::Exception &E) {
                     errorMessage = E.what();
                     status = CHTTPReply::bad_request;
-                    Log()->Error(APP_LOG_EMERG, 0, E.what());
+                    Log()->Error(APP_LOG_ERR, 0, "%s", E.what());
                 }
 
                 if (status == CHTTPReply::ok) {
@@ -507,7 +507,7 @@ namespace Apostol {
                 ExecSQL(SQL, AConnection);
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
-                Log()->Error(APP_LOG_EMERG, 0, E.what());
+                Log()->Error(APP_LOG_ERR, 0, "%s", E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -564,7 +564,7 @@ namespace Apostol {
                 ExecSQL(SQL, AConnection);
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
-                Log()->Error(APP_LOG_EMERG, 0, E.what());
+                Log()->Error(APP_LOG_ERR, 0, "%s", E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -600,7 +600,7 @@ namespace Apostol {
                 ExecSQL(SQL, AConnection);
             } catch (Delphi::Exception::Exception &E) {
                 AConnection->SendStockReply(CHTTPReply::service_unavailable);
-                Log()->Error(APP_LOG_EMERG, 0, E.what());
+                Log()->Error(APP_LOG_ERR, 0, "%s", E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
