@@ -166,7 +166,7 @@ namespace Apostol {
 
             auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
 
-            if (pConnection != nullptr && !pConnection->ClosedGracefully()) {
+            if (pConnection != nullptr && pConnection->Connected()) {
 
                 const auto& Path = pConnection->Data()["path"].Lower();
                 const auto DataArray = Path.Find(_T("/list")) != CString::npos;
