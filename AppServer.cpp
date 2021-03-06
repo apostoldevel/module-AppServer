@@ -621,7 +621,7 @@ namespace Apostol {
             const auto& caSignature = pRequest->Headers.Values(_T("Signature"));
 
             const auto& caAgent = GetUserAgent(AConnection);
-            const auto& caHost = GetHost(AConnection);
+            const auto& caHost = GetRealIP(AConnection);
 
             try {
                 if (caSignature.IsEmpty()) {
