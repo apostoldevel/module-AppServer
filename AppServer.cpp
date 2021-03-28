@@ -164,9 +164,9 @@ namespace Apostol {
 
             CString errorMessage;
 
-            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
+            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
 
-            if (pConnection != nullptr && pConnection->Connected()) {
+            if (pConnection != nullptr && !pConnection->ClosedGracefully()) {
 
                 const auto& Path = pConnection->Data()["path"].Lower();
                 const auto DataArray = Path.Find(_T("/list")) != CString::npos;
@@ -209,7 +209,7 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CAppServer::QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
-            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->PollConnection());
+            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
             ReplyError(pConnection, CHTTPReply::internal_server_error, E.what());
         }
         //--------------------------------------------------------------------------------------------------------------
