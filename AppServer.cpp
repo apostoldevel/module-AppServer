@@ -287,10 +287,7 @@ namespace Apostol {
             const auto& GetSecret = [](const CProvider &Provider, const CString &Application) {
                 const auto &Secret = Provider.Secret(Application);
                 if (Secret.IsEmpty())
-                    throw ExceptionFrm("Not found Secret for \"%s:%s\"",
-                                       Provider.Name.c_str(),
-                                       Application.c_str()
-                    );
+                    throw ExceptionFrm("Not found Secret for \"%s:%s\"", Provider.Name().c_str(), Application.c_str());
                 return Secret;
             };
 
@@ -461,9 +458,9 @@ namespace Apostol {
                 auto& Providers = Server().Providers();
                 for (int i = 0; i < Providers.Count(); i++) {
                     auto &Provider = Providers[i].Value();
-                    if (FileExists(CString(pathCerts + Provider.Name).c_str())) {
-                        Provider.Keys.Clear();
-                        Provider.Keys.LoadFromFile(CString(pathCerts + Provider.Name).c_str());
+                    if (FileExists(CString(pathCerts + Provider.Name()).c_str())) {
+                        Provider.Keys().Clear();
+                        Provider.Keys().LoadFromFile(CString(pathCerts + Provider.Name()).c_str());
                     }
                 }
             } else {
