@@ -168,14 +168,38 @@ namespace Apostol {
 
             if (pConnection != nullptr && !pConnection->ClosedGracefully()) {
 
-                const auto& Path = pConnection->Data()["path"].Lower();
-                const auto DataArray = Path.Find(_T("/list")) != CString::npos;
-
                 auto pRequest = pConnection->Request();
                 auto pReply = pConnection->Reply();
 
-                const auto& result_object = pRequest->Params[_T("result_object")];
-                const auto& data_array = pRequest->Params[_T("data_array")];
+                CStringList ResultObject;
+                CStringList ResultFormat;
+
+                ResultObject.Add("true");
+                ResultObject.Add("false");
+
+                ResultFormat.Add("object");
+                ResultFormat.Add("array");
+                ResultFormat.Add("null");
+
+                const auto &result_object = pRequest->Params[_T("result_object")];
+                const auto &result_format = pRequest->Params[_T("result_format")];
+
+                if (!result_object.IsEmpty() && ResultObject.IndexOfName(result_object) == -1) {
+                    ReplyError(pConnection, CHTTPReply::bad_request, CString().Format("Invalid result_object: %s", result_object.c_str()));
+                    return;
+                }
+
+                if (!result_format.IsEmpty() && ResultFormat.IndexOfName(result_format) == -1) {
+                    ReplyError(pConnection, CHTTPReply::bad_request, CString().Format("Invalid result_format: %s", result_format.c_str()));
+                    return;
+                }
+
+                const auto &patch = pConnection->Data()["path"].Lower();
+                const auto bDataArray = patch.Find(_T("/list")) != CString::npos;
+
+                CString Format(result_format);
+                if (Format.IsEmpty() && bDataArray)
+                    Format = "array";
 
                 CHTTPReply::CStatusType status = CHTTPReply::ok;
 
@@ -184,11 +208,11 @@ namespace Apostol {
                         const CJSON Payload(pResult->GetValue(0, 0));
                         status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
                         if (status == CHTTPReply::ok) {
-                            AfterQuery(pConnection, Path, Payload);
+                            AfterQuery(pConnection, patch, Payload);
                         }
                     }
 
-                    PQResultToJson(pResult, pReply->Content, data_array.IsEmpty() ? DataArray : data_array == "true", result_object == "true" ? "result" : CString());
+                    PQResultToJson(pResult, pReply->Content, Format, result_object == "true" ? "result" : CString());
 
                     if (status == CHTTPReply::ok && !pReply->CacheFile.IsEmpty()) {
                         pReply->Content.SaveToFile(pReply->CacheFile.c_str());
