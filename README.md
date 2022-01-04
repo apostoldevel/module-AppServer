@@ -1,6 +1,6 @@
 Сервер приложений
 -
-**Модуль** для [Апостол CRM](https://github.com/ufocomp/apostol-crm).
+**Модуль** для [Апостол CRM](https://github.com/apostoldevel/apostol-crm).
 
 Описание
 -
@@ -10,7 +10,7 @@
 
 Установка
 -
-Следуйте указаниям по сборке и установке [Апостол CRM](https://github.com/ufocomp/apostol-crm#%D1%81%D0%B1%D0%BE%D1%80%D0%BA%D0%B0-%D0%B8-%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BA%D0%B0)
+Следуйте указаниям по сборке и установке [Апостол CRM](https://github.com/apostoldevel/apostol-crm#%D1%81%D0%B1%D0%BE%D1%80%D0%BA%D0%B0-%D0%B8-%D1%83%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BA%D0%B0)
 
 Документация
 -
@@ -62,7 +62,7 @@ Authorization: Bearer <access_token>
 
 **Маркера доступа** - это `JSON Web Token` [RFC 7519](https://tools.ietf.org/html/rfc7519). 
 
-Выдается он [сервером авторизации](https://github.com/ufocomp/module-AuthServer), роль которого выполняет сама же система.
+Выдается он [сервером авторизации](https://github.com/apostoldevel/module-AuthServer), роль которого выполняет сама же система.
 
 Пример запроса:
 * **http request:**
