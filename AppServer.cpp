@@ -122,13 +122,13 @@ namespace Apostol {
                 if (error.HasOwnProperty(_T("code"))) {
                     errorCode = error[_T("code")].AsInteger();
                 } else {
-                    errorCode = 40000;
+                    return 0;
                 }
 
                 if (error.HasOwnProperty(_T("message"))) {
                     ErrorMessage = error[_T("message")].AsString();
                 } else {
-                    ErrorMessage = _T("Invalid request.");
+                    return 0;
                 }
 
                 if (RaiseIfError)
