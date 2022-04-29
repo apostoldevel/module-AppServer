@@ -101,7 +101,7 @@ namespace Apostol {
             CStringList &CacheList() { return m_CacheList; };
             const CStringList &CacheList() const { return m_CacheList; };
 
-            void Heartbeat() override;
+            void Heartbeat(CDateTime DateTime) override;
 
             bool Enabled() override;
 
