@@ -34,7 +34,7 @@ extern "C++" {
 
 namespace Apostol {
 
-    namespace Workers {
+    namespace Module {
 
         //--------------------------------------------------------------------------------------------------------------
 
@@ -42,7 +42,7 @@ namespace Apostol {
 
         //--------------------------------------------------------------------------------------------------------------
 
-        CAppServer::CAppServer(CModuleProcess *AProcess) : CApostolModule(AProcess, "application server", "worker/AppServer") {
+        CAppServer::CAppServer(CModuleProcess *AProcess) : CApostolModule(AProcess, "application server", "module/AppServer") {
             m_Headers.Add("Authorization");
             m_Headers.Add("Session");
             m_Headers.Add("Secret");
