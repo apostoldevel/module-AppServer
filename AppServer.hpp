@@ -80,7 +80,8 @@ namespace Apostol {
 
             CString VerifyToken(const CString &Token);
 
-            bool CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization);
+            int CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization);
+            void CheckTokenAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization, COnSocketExecuteEvent && OnContinue);
 
             void UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
                 const CString &Payload, const CString &Agent, const CString &Host);

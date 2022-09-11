@@ -445,7 +445,7 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        bool CAppServer::CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization) {
+        int CAppServer::CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization) {
 
             auto pRequest = AConnection->Request();
 
@@ -453,7 +453,7 @@ namespace Apostol {
                 if (CheckAuthorizationData(pRequest, Authorization)) {
                     if (Authorization.Schema == CAuthorization::asBearer) {
                         Authorization.Token = VerifyToken(Authorization.Token);
-                        return true;
+                        return 1;
                     }
                 }
 
@@ -468,10 +468,60 @@ namespace Apostol {
             } catch (CAuthorizationError &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             } catch (std::exception &e) {
-                ReplyError(AConnection, CHTTPReply::bad_request, e.what());
+                return -1;
             }
 
-            return false;
+            return 0;
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        void CAppServer::CheckTokenAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization,
+                COnSocketExecuteEvent &&OnContinue) {
+
+            auto OnExecuted = [OnContinue](CPQPollQuery *APollQuery) {
+                auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
+
+                try {
+                    auto pResult = APollQuery->Results(0);
+
+                    if (pResult->ExecStatus() != PGRES_TUPLES_OK) {
+                        throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
+                    }
+
+                    OnContinue(pConnection);
+                } catch (Delphi::Exception::Exception &E) {
+                    ReplyError(pConnection, CHTTPReply::bad_request, E.what());
+                }
+            };
+
+            auto OnException = [](CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
+                auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
+                ReplyError(pConnection, CHTTPReply::bad_request, E.what());
+            };
+
+            auto pRequest = AConnection->Request();
+
+            try {
+                if (CheckAuthorizationData(pRequest, Authorization)) {
+                    if (Authorization.Schema == CAuthorization::asBearer) {
+                        CStringList SQL;
+
+                        SQL.Add(CString().Format("SELECT daemon.validation(%s);", PQQuoteLiteral(Authorization.Token).c_str()));
+                        ExecSQL(SQL, AConnection, OnExecuted, OnException);
+
+                        return;
+                    }
+                }
+
+                if (Authorization.Schema == CAuthorization::asBasic)
+                    AConnection->Data().Values("Authorization", "Basic");
+
+                ReplyError(AConnection, CHTTPReply::unauthorized, "Unauthorized.");
+            } catch (CAuthorizationError &e) {
+                ReplyError(AConnection, CHTTPReply::bad_request, e.what());
+            } catch (std::exception &e) {
+                ReplyError(AConnection, CHTTPReply::bad_request, e.what());
+            }
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -628,9 +678,39 @@ namespace Apostol {
 
         void CAppServer::DoFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path) {
 
+            auto OnContinue = [this](CTCPConnection *AConnection) {
+
+                auto pConnection = dynamic_cast<CHTTPServerConnection *> (AConnection);
+
+                auto pRequest = pConnection->Request();
+
+                const auto &caAuthorization = pRequest->Headers.Values(_T("Authorization"));
+                const auto &caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
+                const auto &caPath = pRequest->Location.pathname;
+
+                const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
+
+                CJSON Json;
+                if (!bContentJson) {
+                    ContentToJson(pRequest, Json);
+                }
+
+                const auto &caPayload = bContentJson ? pRequest->Content : Json.ToString();
+
+                const auto &caAgent = GetUserAgent(pConnection);
+                const auto &caHost = GetRealIP(pConnection);
+
+                CAuthorization Authorization;
+                Authorization << caAuthorization;
+
+                AuthorizedFetch(pConnection, Authorization, "POST", caPath, caPayload, caAgent, caHost);
+
+                return true;
+            };
+
             auto pRequest = AConnection->Request();
 
-            const auto& caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
+            const auto &caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
             const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
 
             CJSON Json;
@@ -638,17 +718,20 @@ namespace Apostol {
                 ContentToJson(pRequest, Json);
             }
 
-            const auto& caPayload = bContentJson ? pRequest->Content : Json.ToString();
-            const auto& caSignature = pRequest->Headers.Values(_T("Signature"));
+            const auto &caPayload = bContentJson ? pRequest->Content : Json.ToString();
+            const auto &caSignature = pRequest->Headers.Values(_T("Signature"));
 
-            const auto& caAgent = GetUserAgent(AConnection);
-            const auto& caHost = GetRealIP(AConnection);
+            const auto &caAgent = GetUserAgent(AConnection);
+            const auto &caHost = GetRealIP(AConnection);
 
             try {
                 if (caSignature.IsEmpty()) {
                     CAuthorization Authorization;
-                    if (CheckAuthorization(AConnection, Authorization)) {
+                    const auto checkAuthorization = CheckAuthorization(AConnection, Authorization);
+                    if (checkAuthorization == 1) {
                         AuthorizedFetch(AConnection, Authorization, Method, Path, caPayload, caAgent, caHost);
+                    } else if (checkAuthorization == -1) {
+                        CheckTokenAuthorization(AConnection, Authorization, OnContinue);
                     }
                 } else {
                     const auto& caSession = GetSession(pRequest);
