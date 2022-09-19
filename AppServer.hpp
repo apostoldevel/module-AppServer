@@ -49,13 +49,11 @@ namespace Apostol {
             void LoadCerts();
             void UpdateCacheList();
 
-            static void AfterQuery(CHTTPServerConnection *AConnection, const CString &Path, const CJSON &Payload);
-
             void QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E);
 
             static bool CheckAuthorizationData(CHTTPRequest *ARequest, CAuthorization &Authorization);
 
-            static int CheckError(const CJSON &Json, CString &ErrorMessage, bool RaiseIfError = false);
+            static int CheckError(const CJSON &Json, CString &ErrorMessage);
             static CHTTPReply::CStatusType ErrorCodeToStatus(int ErrorCode);
 
         protected:

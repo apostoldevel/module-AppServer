@@ -113,7 +113,7 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        int CAppServer::CheckError(const CJSON &Json, CString &ErrorMessage, bool RaiseIfError) {
+        int CAppServer::CheckError(const CJSON &Json, CString &ErrorMessage) {
             int errorCode = 0;
 
             if (Json.HasOwnProperty(_T("error"))) {
@@ -131,9 +131,6 @@ namespace Apostol {
                     return 0;
                 }
 
-                if (RaiseIfError)
-                    throw EDBError(ErrorMessage.c_str());
-
                 if (errorCode >= 10000)
                     errorCode = errorCode / 100;
 
@@ -142,14 +139,6 @@ namespace Apostol {
             }
 
             return errorCode;
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CAppServer::AfterQuery(CHTTPServerConnection *AConnection, const CString &Path, const CJSON &Payload) {
-            if (Path == _T("/sign/out")) {
-                auto pReply = AConnection->Reply();
-                pReply->SetCookie(_T("SID"), _T("null"), _T("/"), -1);
-            }
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -207,9 +196,6 @@ namespace Apostol {
                     if (pResult->nTuples() == 1) {
                         const CJSON Payload(pResult->GetValue(0, 0));
                         status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
-                        if (status == CHTTPReply::ok) {
-                            AfterQuery(pConnection, patch, Payload);
-                        }
                     }
 
                     PQResultToJson(pResult, pReply->Content, Format, result_object == "true" ? "result" : CString());
