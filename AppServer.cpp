@@ -474,7 +474,16 @@ namespace Apostol {
                         throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
                     }
 
-                    OnContinue(pConnection);
+                    CString ErrorMessage;
+
+                    const CJSON Payload(pResult->GetValue(0, 0));
+                    const auto status = ErrorCodeToStatus(CheckError(Payload, ErrorMessage));
+
+                    if (status == CHTTPReply::ok) {
+                        OnContinue(pConnection);
+                    } else {
+                        ReplyError(pConnection, status, ErrorMessage);
+                    }
                 } catch (Delphi::Exception::Exception &E) {
                     ReplyError(pConnection, CHTTPReply::bad_request, E.what());
                 }
