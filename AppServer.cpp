@@ -157,8 +157,8 @@ namespace Apostol {
 
             if (pConnection != nullptr && !pConnection->ClosedGracefully()) {
 
-                auto pRequest = pConnection->Request();
-                auto pReply = pConnection->Reply();
+                const auto &caRequest = pConnection->Request();
+                auto &Reply = pConnection->Reply();
 
                 CStringList ResultObject;
                 CStringList ResultFormat;
@@ -170,8 +170,8 @@ namespace Apostol {
                 ResultFormat.Add("array");
                 ResultFormat.Add("null");
 
-                const auto &result_object = pRequest->Params[_T("result_object")];
-                const auto &result_format = pRequest->Params[_T("result_format")];
+                const auto &result_object = caRequest.Params[_T("result_object")];
+                const auto &result_format = caRequest.Params[_T("result_format")];
 
                 if (!result_object.IsEmpty() && ResultObject.IndexOfName(result_object) == -1) {
                     ReplyError(pConnection, CHTTPReply::bad_request, CString().Format("Invalid result_object: %s", result_object.c_str()));
@@ -198,10 +198,10 @@ namespace Apostol {
                         status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
                     }
 
-                    PQResultToJson(pResult, pReply->Content, Format, result_object == "true" ? "result" : CString());
+                    PQResultToJson(pResult, Reply.Content, Format, result_object == "true" ? "result" : CString());
 
-                    if (status == CHTTPReply::ok && !pReply->CacheFile.IsEmpty()) {
-                        pReply->Content.SaveToFile(pReply->CacheFile.c_str());
+                    if (status == CHTTPReply::ok && !Reply.CacheFile.IsEmpty()) {
+                        Reply.Content.SaveToFile(Reply.CacheFile.c_str());
                     }
                 } catch (Delphi::Exception::Exception &E) {
                     errorMessage = E.what();
@@ -229,16 +229,16 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        CString CAppServer::GetSession(CHTTPRequest *ARequest) {
-            const auto& headerSession = ARequest->Headers.Values(_T("Session"));
-            const auto& cookieSession = ARequest->Cookies.Values(_T("SID"));
+        CString CAppServer::GetSession(const CHTTPRequest &Request) {
+            const auto& headerSession = Request.Headers.Values(_T("Session"));
+            const auto& cookieSession = Request.Cookies.Values(_T("SID"));
 
             return headerSession.IsEmpty() ? cookieSession : headerSession;
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        bool CAppServer::CheckSession(CHTTPRequest *ARequest, CString &Session) {
-            const auto& caSession = GetSession(ARequest);
+        bool CAppServer::CheckSession(const CHTTPRequest &Request, CString &Session) {
+            const auto& caSession = GetSession(Request);
 
             if (caSession.Length() != 40)
                 return false;
@@ -404,9 +404,9 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        bool CAppServer::CheckAuthorizationData(CHTTPRequest *ARequest, CAuthorization &Authorization) {
+        bool CAppServer::CheckAuthorizationData(const CHTTPRequest &Request, CAuthorization &Authorization) {
 
-            const auto &caHeaders = ARequest->Headers;
+            const auto &caHeaders = Request.Headers;
             const auto &caAuthorization = caHeaders.Values(_T("Authorization"));
 
             if (caAuthorization.IsEmpty()) {
@@ -433,10 +433,10 @@ namespace Apostol {
 
         int CAppServer::CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization) {
 
-            auto pRequest = AConnection->Request();
+            const auto &caRequest = AConnection->Request();
 
             try {
-                if (CheckAuthorizationData(pRequest, Authorization)) {
+                if (CheckAuthorizationData(caRequest, Authorization)) {
                     if (Authorization.Schema == CAuthorization::asBearer) {
                         Authorization.Token = VerifyToken(Authorization.Token);
                         return 1;
@@ -494,10 +494,10 @@ namespace Apostol {
                 ReplyError(pConnection, CHTTPReply::bad_request, E.what());
             };
 
-            auto pRequest = AConnection->Request();
+            const auto &caRequest = AConnection->Request();
 
             try {
-                if (CheckAuthorizationData(pRequest, Authorization)) {
+                if (CheckAuthorizationData(caRequest, Authorization)) {
                     if (Authorization.Schema == CAuthorization::asBearer) {
                         CStringList SQL;
 
@@ -677,20 +677,20 @@ namespace Apostol {
 
                 auto pConnection = dynamic_cast<CHTTPServerConnection *> (AConnection);
 
-                auto pRequest = pConnection->Request();
+                const auto &caRequest = pConnection->Request();
 
-                const auto &caAuthorization = pRequest->Headers.Values(_T("Authorization"));
-                const auto &caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
-                const auto &caPath = pRequest->Location.pathname;
+                const auto &caAuthorization = caRequest.Headers.Values(_T("Authorization"));
+                const auto &caContentType = caRequest.Headers.Values(_T("Content-Type")).Lower();
+                const auto &caPath = caRequest.Location.pathname;
 
                 const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
 
                 CJSON Json;
                 if (!bContentJson) {
-                    ContentToJson(pRequest, Json);
+                    ContentToJson(caRequest, Json);
                 }
 
-                const auto &caPayload = bContentJson ? pRequest->Content : Json.ToString();
+                const auto &caPayload = bContentJson ? caRequest.Content : Json.ToString();
 
                 const auto &caAgent = GetUserAgent(pConnection);
                 const auto &caHost = GetRealIP(pConnection);
@@ -703,18 +703,18 @@ namespace Apostol {
                 return true;
             };
 
-            auto pRequest = AConnection->Request();
+            const auto &caRequest = AConnection->Request();
 
-            const auto &caContentType = pRequest->Headers.Values(_T("Content-Type")).Lower();
+            const auto &caContentType = caRequest.Headers.Values(_T("Content-Type")).Lower();
             const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
 
             CJSON Json;
             if (!bContentJson) {
-                ContentToJson(pRequest, Json);
+                ContentToJson(caRequest, Json);
             }
 
-            const auto &caPayload = bContentJson ? pRequest->Content : Json.ToString();
-            const auto &caSignature = pRequest->Headers.Values(_T("Signature"));
+            const auto &caPayload = bContentJson ? caRequest.Content : Json.ToString();
+            const auto &caSignature = caRequest.Headers.Values(_T("Signature"));
 
             const auto &caAgent = GetUserAgent(AConnection);
             const auto &caHost = GetRealIP(AConnection);
@@ -729,11 +729,11 @@ namespace Apostol {
                         CheckTokenAuthorization(AConnection, Authorization, OnContinue);
                     }
                 } else {
-                    const auto& caSession = GetSession(pRequest);
-                    const auto& caNonce = pRequest->Headers.Values(_T("Nonce"));
+                    const auto& caSession = GetSession(caRequest);
+                    const auto& caNonce = caRequest.Headers.Values(_T("Nonce"));
 
                     long int receiveWindow = 5000;
-                    const auto& caReceiveWindow = pRequest->Params[_T("receive_window")];
+                    const auto& caReceiveWindow = caRequest.Params[_T("receive_window")];
                     if (!caReceiveWindow.IsEmpty())
                         receiveWindow = StrToIntDef(caReceiveWindow.c_str(), receiveWindow);
 
@@ -747,12 +747,12 @@ namespace Apostol {
 
         void CAppServer::DoGet(CHTTPServerConnection *AConnection) {
 
-            auto pRequest = AConnection->Request();
-            auto pReply = AConnection->Reply();
+            const auto &caRequest = AConnection->Request();
+            auto &Reply = AConnection->Reply();
 
-            pReply->ContentType = CHTTPReply::json;
+            Reply.ContentType = CHTTPReply::json;
 
-            const auto &path = pRequest->Location.pathname;
+            const auto &path = caRequest.Location.pathname;
 
             if (path.IsEmpty()) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
@@ -766,7 +766,7 @@ namespace Apostol {
 
                 } else if (path == "/api/v1/time") {
 
-                    pReply->Content << "{\"serverTime\": " << LongToString(MsEpoch()) << "}";
+                    Reply.Content << "{\"serverTime\": " << LongToString(MsEpoch()) << "}";
 
                     AConnection->SendReply(CHTTPReply::ok);
 
@@ -784,12 +784,12 @@ namespace Apostol {
 
         void CAppServer::DoPost(CHTTPServerConnection *AConnection) {
 
-            auto pRequest = AConnection->Request();
-            auto pReply = AConnection->Reply();
+            const auto &caRequest = AConnection->Request();
+            auto &Reply = AConnection->Reply();
 
-            pReply->ContentType = CHTTPReply::json;
+            Reply.ContentType = CHTTPReply::json;
 
-            const auto &path = pRequest->Location.pathname;
+            const auto &path = caRequest.Location.pathname;
 
             if (path.IsEmpty()) {
                 AConnection->SendStockReply(CHTTPReply::not_found);
