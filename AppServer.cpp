@@ -767,7 +767,7 @@ namespace Apostol {
 
                 } else if (path == "/api/v1/time") {
 
-                    Reply.Content << "{\"serverTime\": " << LongToString(MsEpoch()) << "}";
+                    Reply.Content << "{\"serverTime\": " << CString::ToString(MsEpoch()) << "}";
 
                     AConnection->SendReply(CHTTPReply::ok);
 
