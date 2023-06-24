@@ -51,10 +51,14 @@ namespace Apostol {
 
             void QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E);
 
+            static bool FindToken(const CHTTPRequest &Request, CAuthorization &Authorization);
+            static bool FindSession(const CHTTPRequest &Request, CAuthorization &Authorization);
             static bool CheckAuthorizationData(const CHTTPRequest &Request, CAuthorization &Authorization);
 
             static int CheckError(const CJSON &Json, CString &ErrorMessage);
             static CHTTPReply::CStatusType ErrorCodeToStatus(int ErrorCode);
+
+            static void SetSecure(CHTTPReply &Reply, const CString &AccessToken, const CString &RefreshToken, const CString &Session, const CString &Domain);
 
         protected:
 
@@ -79,7 +83,7 @@ namespace Apostol {
             CString VerifyToken(const CString &Token);
 
             int CheckAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization);
-            void CheckTokenAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization, COnSocketExecuteEvent && OnContinue);
+            void CheckTokenAuthorization(CHTTPServerConnection *AConnection, const CString& Action, const CAuthorization &Authorization, COnSocketExecuteEvent && OnContinue);
 
             void UnauthorizedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
                 const CString &Payload, const CString &Agent, const CString &Host);

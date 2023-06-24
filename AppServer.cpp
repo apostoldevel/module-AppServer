@@ -405,30 +405,71 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        bool CAppServer::CheckAuthorizationData(const CHTTPRequest &Request, CAuthorization &Authorization) {
+        void CAppServer::SetSecure(CHTTPReply &Reply, const CString &AccessToken, const CString &RefreshToken, const CString &Session, const CString &Domain) {
+            if (!AccessToken.IsEmpty())
+                Reply.SetCookie(_T("__Secure-AT"), AccessToken.c_str(), _T("/"), 60 * SecsPerDay, true, _T("None"), true, Domain.c_str());
 
+            if (!RefreshToken.IsEmpty())
+                Reply.SetCookie(_T("__Secure-RT"), RefreshToken.c_str(), _T("/"), 60 * SecsPerDay, true, _T("None"), true, Domain.c_str());
+
+            if (!Session.IsEmpty())
+                Reply.SetCookie(_T("SID"), Session.c_str(), _T("/"), 60 * SecsPerDay);
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        bool CAppServer::FindToken(const CHTTPRequest &Request, CAuthorization &Authorization) {
+            const auto &access_token = Request.Cookies.Values(_T("__Secure-AT"));
+            const auto &refresh_token = Request.Cookies.Values(_T("__Secure-RT"));
+
+            if (access_token.empty())
+                return false;
+
+            Authorization.Schema = CAuthorization::asBearer;
+            Authorization.Type = CAuthorization::atSession;
+            Authorization.Token = access_token;
+
+            if (!refresh_token.empty())
+                Authorization.Password = CHTTPServer::URLDecode(refresh_token);
+
+            return true;
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        bool CAppServer::FindSession(const CHTTPRequest &Request, CAuthorization &Authorization) {
+            const auto &caHeaders = Request.Headers;
+
+            const auto &headerSession = caHeaders.Values(_T("Session"));
+            const auto &headerSecret = caHeaders.Values(_T("Secret"));
+
+            Authorization.Username = headerSession;
+            Authorization.Password = headerSecret;
+
+            if (Authorization.Username.IsEmpty() || Authorization.Password.IsEmpty())
+                return false;
+
+            Authorization.Schema = CAuthorization::asBasic;
+            Authorization.Type = CAuthorization::atSession;
+
+            return true;
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        bool CAppServer::CheckAuthorizationData(const CHTTPRequest &Request, CAuthorization &Authorization) {
             const auto &caHeaders = Request.Headers;
             const auto &caAuthorization = caHeaders.Values(_T("Authorization"));
 
             if (caAuthorization.IsEmpty()) {
+                if (FindSession(Request, Authorization))
+                    return true;
 
-                const auto &headerSession = caHeaders.Values(_T("Session"));
-                const auto &headerSecret = caHeaders.Values(_T("Secret"));
-
-                Authorization.Username = headerSession;
-                Authorization.Password = headerSecret;
-
-                if (Authorization.Username.IsEmpty() || Authorization.Password.IsEmpty())
-                    return false;
-
-                Authorization.Schema = CAuthorization::asBasic;
-                Authorization.Type = CAuthorization::atSession;
-
+                if (FindToken(Request, Authorization))
+                    return true;
             } else {
                 Authorization << caAuthorization;
+                return true;
             }
 
-            return true;
+            return false;
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -439,9 +480,11 @@ namespace Apostol {
             try {
                 if (CheckAuthorizationData(caRequest, Authorization)) {
                     if (Authorization.Schema == CAuthorization::asBearer) {
+                        AConnection->Data().Values("Authorization", "Bearer " + Authorization.Token);
                         Authorization.Token = VerifyToken(Authorization.Token);
-                        return 1;
                     }
+
+                    return 1;
                 }
 
                 if (Authorization.Schema == CAuthorization::asBasic)
@@ -449,24 +492,31 @@ namespace Apostol {
 
                 ReplyError(AConnection, CHTTPReply::unauthorized, "Unauthorized.");
             } catch (jwt::error::token_expired_exception &e) {
+                if (Authorization.Schema == CAuthorization::asBearer && Authorization.Type == CAuthorization::atSession && !Authorization.Password.IsEmpty())
+                    return 2;
                 ReplyError(AConnection, CHTTPReply::forbidden, e.what());
             } catch (jwt::error::token_verification_exception &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             } catch (CAuthorizationError &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
+            } catch (COAuth2Error &e) {
+                return 2;
             } catch (std::exception &e) {
-                return -1;
+                ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             }
 
             return 0;
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CAppServer::CheckTokenAuthorization(CHTTPServerConnection *AConnection, CAuthorization &Authorization,
-                COnSocketExecuteEvent &&OnContinue) {
+        void CAppServer::CheckTokenAuthorization(CHTTPServerConnection *AConnection, const CString& Action,
+                const CAuthorization &Authorization, COnSocketExecuteEvent &&OnContinue) {
 
             auto OnExecuted = [OnContinue](CPQPollQuery *APollQuery) {
                 auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
+
+                if (pConnection == nullptr)
+                    return;
 
                 try {
                     auto pResult = APollQuery->Results(0);
@@ -475,16 +525,9 @@ namespace Apostol {
                         throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
                     }
 
-                    CString ErrorMessage;
+                    pConnection->Data().Values("payload", pResult->GetValue(0, 0));
 
-                    const CJSON Payload(pResult->GetValue(0, 0));
-                    const auto status = ErrorCodeToStatus(CheckError(Payload, ErrorMessage));
-
-                    if (status == CHTTPReply::ok) {
-                        OnContinue(pConnection);
-                    } else {
-                        ReplyError(pConnection, status, ErrorMessage);
-                    }
+                    OnContinue(pConnection);
                 } catch (Delphi::Exception::Exception &E) {
                     ReplyError(pConnection, CHTTPReply::bad_request, E.what());
                 }
@@ -498,23 +541,26 @@ namespace Apostol {
             const auto &caRequest = AConnection->Request();
 
             try {
-                if (CheckAuthorizationData(caRequest, Authorization)) {
-                    if (Authorization.Schema == CAuthorization::asBearer) {
-                        CStringList SQL;
+                if (Authorization.Schema == CAuthorization::asBearer) {
+                    CStringList SQL;
 
-                        SQL.Add(CString().Format("SELECT daemon.validation(%s);", PQQuoteLiteral(Authorization.Token).c_str()));
-                        ExecSQL(SQL, AConnection, OnExecuted, OnException);
+                    AConnection->Data().Values("action", Action);
 
-                        return;
+                    if (Action == "refresh_token") {
+                        SQL.Add(CString().Format("SELECT daemon.%s(%s, %s);", Action.c_str(), PQQuoteLiteral(Authorization.Token).c_str(), PQQuoteLiteral(Authorization.Password).c_str()));
+                    } else {
+                        SQL.Add(CString().Format("SELECT daemon.%s(%s);", Action.c_str(), PQQuoteLiteral(Authorization.Token).c_str()));
                     }
+
+                    ExecSQL(SQL, AConnection, OnExecuted, OnException);
+
+                } else {
+
+                    if (Authorization.Schema == CAuthorization::asBasic)
+                        AConnection->Data().Values("Authorization", "Basic");
+
+                    ReplyError(AConnection, CHTTPReply::unauthorized, "Unauthorized.");
                 }
-
-                if (Authorization.Schema == CAuthorization::asBasic)
-                    AConnection->Data().Values("Authorization", "Basic");
-
-                ReplyError(AConnection, CHTTPReply::unauthorized, "Unauthorized.");
-            } catch (CAuthorizationError &e) {
-                ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             } catch (std::exception &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             }
@@ -678,30 +724,58 @@ namespace Apostol {
 
                 auto pConnection = dynamic_cast<CHTTPServerConnection *> (AConnection);
 
-                const auto &caRequest = pConnection->Request();
+                if (pConnection != nullptr && pConnection->Connected()) {
+                    const auto &Request = pConnection->Request();
+                    auto &Reply = pConnection->Reply();
 
-                const auto &caAuthorization = caRequest.Headers.Values(_T("Authorization"));
-                const auto &caContentType = caRequest.Headers.Values(_T("Content-Type")).Lower();
-                const auto &caPath = caRequest.Location.pathname;
+                    const CJSON Payload(pConnection->Data()["payload"]);
 
-                const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
+                    CString ErrorMessage;
 
-                CJSON Json;
-                if (!bContentJson) {
-                    ContentToJson(caRequest, Json);
+                    const auto status = ErrorCodeToStatus(CheckError(Payload, ErrorMessage));
+
+                    if (status == CHTTPReply::ok) {
+                        CAuthorization Authorization;
+
+                        const auto &caAction = pConnection->Data().Values(_T("action"));
+
+                        if (caAction == "refresh_token") {
+                            const auto &access_token = Payload[_T("access_token")].AsString();
+                            const auto &refresh_token = Payload[_T("refresh_token")].AsString();
+                            const auto &session = Payload[_T("session")].AsString();
+
+                            SetSecure(Reply, access_token, refresh_token, session, Request.Location.hostname);
+
+                            Authorization.Schema = CAuthorization::asBearer;
+                            Authorization.Token = access_token;
+                        } else {
+                            Authorization << pConnection->Data().Values(_T("Authorization"));
+                        }
+
+                        const auto &caContentType = Request.Headers.Values(_T("Content-Type")).Lower();
+                        const auto &caPath = Request.Location.pathname;
+
+                        const auto bContentJson = (caContentType.Find(_T("application/json")) != CString::npos);
+
+                        CJSON Json;
+                        if (!bContentJson) {
+                            ContentToJson(Request, Json);
+                        }
+
+                        const auto &caPayload = bContentJson ? Request.Content : Json.ToString();
+
+                        const auto &caAgent = GetUserAgent(pConnection);
+                        const auto &caHost = GetRealIP(pConnection);
+
+                        AuthorizedFetch(pConnection, Authorization, "POST", caPath, caPayload, caAgent, caHost);
+                    } else {
+                        ReplyError(pConnection, status, ErrorMessage);
+                    }
+
+                    return true;
                 }
 
-                const auto &caPayload = bContentJson ? caRequest.Content : Json.ToString();
-
-                const auto &caAgent = GetUserAgent(pConnection);
-                const auto &caHost = GetRealIP(pConnection);
-
-                CAuthorization Authorization;
-                Authorization << caAuthorization;
-
-                AuthorizedFetch(pConnection, Authorization, "POST", caPath, caPayload, caAgent, caHost);
-
-                return true;
+                return false;
             };
 
             const auto &caRequest = AConnection->Request();
@@ -726,8 +800,8 @@ namespace Apostol {
                     const auto checkAuthorization = CheckAuthorization(AConnection, Authorization);
                     if (checkAuthorization == 1) {
                         AuthorizedFetch(AConnection, Authorization, Method, Path, caPayload, caAgent, caHost);
-                    } else if (checkAuthorization == -1) {
-                        CheckTokenAuthorization(AConnection, Authorization, OnContinue);
+                    } else if (checkAuthorization == 2) {
+                        CheckTokenAuthorization(AConnection, Authorization.Type == CAuthorization::atSession ? "refresh_token" : "validation", Authorization, OnContinue);
                     }
                 } else {
                     const auto& caSession = GetSession(caRequest);
@@ -740,8 +814,8 @@ namespace Apostol {
 
                     SignedFetch(AConnection, Method, Path, caPayload, caSession, caNonce, caSignature, caAgent, caHost, receiveWindow);
                 }
-            } catch (Delphi::Exception::Exception &E) {
-                ReplyError(AConnection, CHTTPReply::bad_request, E.what());
+            } catch (std::exception &e) {
+                ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
