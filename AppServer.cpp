@@ -486,11 +486,14 @@ namespace Apostol {
 
                     return 1;
                 }
-
+#ifdef CALL_UNAUTHORIZED_FETCH
+                return 0;
+#else
                 if (Authorization.Schema == CAuthorization::asBasic)
                     AConnection->Data().Values("Authorization", "Basic");
 
                 ReplyError(AConnection, CHTTPReply::unauthorized, "Unauthorized.");
+#endif
             } catch (jwt::error::token_expired_exception &e) {
                 if (Authorization.Schema == CAuthorization::asBearer && Authorization.Type == CAuthorization::atSession && !Authorization.Password.IsEmpty())
                     return 2;
@@ -505,7 +508,7 @@ namespace Apostol {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             }
 
-            return 0;
+            return -1;
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -798,7 +801,13 @@ namespace Apostol {
                 if (caSignature.IsEmpty()) {
                     CAuthorization Authorization;
                     const auto checkAuthorization = CheckAuthorization(AConnection, Authorization);
+#ifdef CALL_UNAUTHORIZED_FETCH
+                    if (checkAuthorization == 0) {
+                        UnauthorizedFetch(AConnection, Method, Path, caPayload, caAgent, caHost);
+                    } else if (checkAuthorization == 1) {
+#else
                     if (checkAuthorization == 1) {
+#endif
                         AuthorizedFetch(AConnection, Authorization, Method, Path, caPayload, caAgent, caHost);
                     } else if (checkAuthorization == 2) {
                         CheckTokenAuthorization(AConnection, Authorization.Type == CAuthorization::atSession ? "refresh_token" : "validation", Authorization, OnContinue);
