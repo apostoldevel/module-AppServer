@@ -55,6 +55,7 @@ namespace Apostol {
             static bool FindSession(const CHTTPRequest &Request, CAuthorization &Authorization);
             static bool CheckAuthorizationData(const CHTTPRequest &Request, CAuthorization &Authorization);
 
+            static int CheckRawData(const CJSON &Json, CString &Content);
             static int CheckError(const CJSON &Json, CString &ErrorMessage);
             static CHTTPReply::CStatusType ErrorCodeToStatus(int ErrorCode);
 

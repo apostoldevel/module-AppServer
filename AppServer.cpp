@@ -113,6 +113,18 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
+        int CAppServer::CheckRawData(const CJSON &Json, CString &Content) {
+            if (Json.HasOwnProperty(_T("#raw"))) {
+                const auto& raw = Json[_T("#raw")];
+                if (raw.HasOwnProperty(_T("#data"))) {
+                    Content = raw[_T("#data")].AsString();
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
         int CAppServer::CheckError(const CJSON &Json, CString &ErrorMessage) {
             int errorCode = 0;
 
@@ -151,11 +163,10 @@ namespace Apostol {
                 return;
             }
 
-            CString errorMessage;
-
             auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
 
             if (pConnection != nullptr && !pConnection->ClosedGracefully()) {
+                CString errorMessage;
 
                 const auto &caRequest = pConnection->Request();
                 auto &Reply = pConnection->Reply();
@@ -193,15 +204,22 @@ namespace Apostol {
                 CHTTPReply::CStatusType status = CHTTPReply::ok;
 
                 try {
+                    int row_data = 0;
+
                     if (pResult->nTuples() == 1) {
                         const CJSON Payload(pResult->GetValue(0, 0));
-                        status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
+                        row_data = CheckRawData(Payload, Reply.Content);
+                        if (row_data == 0) {
+                            status = ErrorCodeToStatus(CheckError(Payload, errorMessage));
+                        }
                     }
 
-                    PQResultToJson(pResult, Reply.Content, Format, result_object == "true" ? "result" : CString());
+                    if (row_data == 0) {
+                        PQResultToJson(pResult, Reply.Content, Format, result_object == "true" ? "result" : CString());
 
-                    if (status == CHTTPReply::ok && !Reply.CacheFile.IsEmpty()) {
-                        Reply.Content.SaveToFile(Reply.CacheFile.c_str());
+                        if (status == CHTTPReply::ok && !Reply.CacheFile.IsEmpty()) {
+                            Reply.Content.SaveToFile(Reply.CacheFile.c_str());
+                        }
                     }
                 } catch (Delphi::Exception::Exception &E) {
                     errorMessage = E.what();
