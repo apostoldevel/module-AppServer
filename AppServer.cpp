@@ -702,7 +702,7 @@ namespace Apostol {
             }
         }
         //--------------------------------------------------------------------------------------------------------------
-
+#ifdef CALL_SIGNATURE_FETCH
         void CAppServer::SignedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
                 const CString &Payload, const CString &Session, const CString &Nonce, const CString &Signature,
                 const CString &Agent, const CString &Host, long int ReceiveWindow) {
@@ -738,7 +738,7 @@ namespace Apostol {
             }
         }
         //--------------------------------------------------------------------------------------------------------------
-
+#endif
         void CAppServer::DoFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path) {
 
             auto OnContinue = [this](CTCPConnection *AConnection) {
@@ -810,13 +810,16 @@ namespace Apostol {
             }
 
             const auto &caPayload = bContentJson ? caRequest.Content : Json.ToString();
+#ifdef CALL_SIGNATURE_FETCH
             const auto &caSignature = caRequest.Headers.Values(_T("Signature"));
-
+#endif
             const auto &caAgent = GetUserAgent(AConnection);
             const auto &caHost = GetRealIP(AConnection);
 
             try {
+#ifdef CALL_SIGNATURE_FETCH
                 if (caSignature.IsEmpty()) {
+#endif
                     CAuthorization Authorization;
                     const auto checkAuthorization = CheckAuthorization(AConnection, Authorization);
 #ifdef CALL_UNAUTHORIZED_FETCH
@@ -830,6 +833,7 @@ namespace Apostol {
                     } else if (checkAuthorization == 2) {
                         CheckTokenAuthorization(AConnection, Authorization.Type == CAuthorization::atSession ? "refresh_token" : "validation", Authorization, OnContinue);
                     }
+#ifdef CALL_SIGNATURE_FETCH
                 } else {
                     const auto& caSession = GetSession(caRequest);
                     const auto& caNonce = caRequest.Headers.Values(_T("Nonce"));
@@ -841,6 +845,7 @@ namespace Apostol {
 
                     SignedFetch(AConnection, Method, Path, caPayload, caSession, caNonce, caSignature, caAgent, caHost, receiveWindow);
                 }
+#endif
             } catch (std::exception &e) {
                 ReplyError(AConnection, CHTTPReply::bad_request, e.what());
             }

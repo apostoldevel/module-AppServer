@@ -91,11 +91,11 @@ namespace Apostol {
 
             void AuthorizedFetch(CHTTPServerConnection *AConnection, const CAuthorization &Authorization,
                 const CString &Method, const CString &Path, const CString &Payload, const CString &Agent, const CString &Host);
-
+#ifdef CALL_SIGNATURE_FETCH
             void SignedFetch(CHTTPServerConnection *AConnection, const CString &Method, const CString &Path,
                 const CString &Payload, const CString &Session, const CString &Nonce, const CString &Signature,
                 const CString &Agent, const CString &Host, long int ReceiveWindow = 5000);
-
+#endif
             static CString GetSession(const CHTTPRequest &Request);
             static bool CheckSession(const CHTTPRequest &Request, CString &Session);
 
