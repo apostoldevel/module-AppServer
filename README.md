@@ -3,7 +3,7 @@
 App Server
 -
 
-**Module** for [Apostol](https://github.com/apostoldevel/apostol).
+**Module** for [Apostol](https://github.com/apostoldevel/apostol) + [db-platform](https://github.com/apostoldevel/db-platform) — **Apostol CRM**[^crm].
 
 Description
 -
@@ -330,3 +330,5 @@ All paths under `/api/` that are not handled by the built-in endpoints above are
 | HMAC-SHA256 signature | `daemon.signed_fetch(method, path, payload, session, nonce, signature, agent, host, window)` |
 
 The full set of application endpoints is therefore defined entirely in the project's database, in the `daemon` schema PL/pgSQL functions. **See your project's repository for endpoint documentation.**
+
+[^crm]: **Apostol CRM** is an abstract term, not a standalone product. It refers to any project that uses both the [Apostol](https://github.com/apostoldevel/apostol) C++ framework and [db-platform](https://github.com/apostoldevel/db-platform) together through purpose-built modules and processes. Each framework can be used independently; combined, they form a full-stack backend platform.
