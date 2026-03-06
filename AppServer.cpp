@@ -374,16 +374,17 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
         pq_quote_literal(refresh_token));
 
     // Capture values needed for the chained second query
-    auto method_str  = std::string(method);
-    auto payload_str = payload;
-    auto path_str    = req.path;
-    auto agent_str   = get_user_agent(req);
-    auto host_str    = get_real_ip(req);
+    auto method_str   = std::string(method);
+    auto payload_str  = payload;
+    auto path_str     = req.path;
+    auto agent_str    = get_user_agent(req);
+    auto host_str     = get_real_ip(req);
+    auto hostname_str = get_host(req);
 
     auto pool_ptr = &pool_;
 
     exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str]
+        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname_str]
         (std::shared_ptr<HttpConnection> conn,
          std::vector<PgResult> results) {
 
@@ -465,7 +466,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
                 // Chain: second PG query using the refreshed token
                 pool_ptr->execute(std::move(fetch_sql),
-                    [conn, new_token, new_refresh, session_id]
+                    [conn, new_token, new_refresh, session_id, hostname_str]
                     (std::vector<PgResult> results2) {
                         HttpResponse r2;
                         r2.set_header("Content-Type", "application/json");
@@ -473,10 +474,12 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                         // Set secure cookies with refreshed tokens
                         if (!new_token.empty())
                             r2.set_cookie("__Secure-AT", new_token, "/",
-                                         60 * 86400, true, "None", true);
+                                         60 * 86400, true, "None", true,
+                                         hostname_str);
                         if (!new_refresh.empty())
                             r2.set_cookie("__Secure-RT", new_refresh, "/",
-                                         60 * 86400, true, "None", true);
+                                         60 * 86400, true, "None", true,
+                                         hostname_str);
                         if (!session_id.empty())
                             r2.set_cookie("SID", session_id, "/", 60 * 86400);
 
