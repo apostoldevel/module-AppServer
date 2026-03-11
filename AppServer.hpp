@@ -60,6 +60,7 @@ namespace Apostol {
             static CHTTPReply::CStatusType ErrorCodeToStatus(int ErrorCode);
 
             static void SetSecure(CHTTPReply &Reply, const CString &AccessToken, const CString &RefreshToken, const CString &Session, const CString &Domain);
+            static void ClearSecure(CHTTPReply &Reply, const CString &Domain);
 
         protected:
 

@@ -228,6 +228,9 @@ namespace Apostol {
                 }
 
                 if (status == CHTTPReply::ok) {
+                    if (patch == _T("/sign/out")) {
+                        ClearSecure(Reply, caRequest.Location.hostname);
+                    }
                     pConnection->SendReply(status, nullptr, true);
                 } else {
                     ReplyError(pConnection, status, errorMessage);
@@ -432,6 +435,13 @@ namespace Apostol {
 
             if (!Session.IsEmpty())
                 Reply.SetCookie(_T("SID"), Session.c_str(), _T("/"), 60 * SecsPerDay);
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        void CAppServer::ClearSecure(CHTTPReply &Reply, const CString &Domain) {
+            Reply.SetCookie(_T("__Secure-AT"), _T(""), _T("/"), -1, true, _T("None"), true, Domain.c_str());
+            Reply.SetCookie(_T("__Secure-RT"), _T(""), _T("/"), -1, true, _T("None"), true, Domain.c_str());
+            Reply.SetCookie(_T("SID"), _T(""), _T("/"), -1);
         }
         //--------------------------------------------------------------------------------------------------------------
 
