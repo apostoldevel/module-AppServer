@@ -228,7 +228,7 @@ namespace Apostol {
                 }
 
                 if (status == CHTTPReply::ok) {
-                    if (patch == _T("/sign/out")) {
+                    if (patch.Find(_T("/sign/out")) != CString::npos) {
                         ClearSecure(Reply, caRequest.Location.hostname);
                     }
                     pConnection->SendReply(status, nullptr, true);
