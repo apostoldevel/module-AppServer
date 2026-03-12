@@ -82,13 +82,27 @@ static void process_result(HttpResponse& resp,
     }
 }
 
+/// Clear auth cookies on sign-out.
+static void clear_secure(HttpResponse& resp)
+{
+    resp.set_cookie("__Secure-AT", "", "/", -1, true, "None", true);
+    resp.set_cookie("__Secure-RT", "", "/", -1, true, "None", true);
+    resp.set_cookie("SID", "", "/", -1);
+}
+
 /// PgResultHandler that processes result and sends response.
 static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
-                            std::vector<PgResult> results)
+                            std::vector<PgResult> results,
+                            const std::string& path = {})
 {
     HttpResponse r;
     r.set_header("Content-Type", "application/json");
     process_result(r, results);
+
+    // Clear auth cookies on sign-out
+    if (!path.empty() && path.find("/sign/out") != std::string::npos)
+        clear_secure(r);
+
     conn->send_response(r);
 }
 
@@ -317,7 +331,11 @@ void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
         "SELECT * FROM daemon.unauthorized_fetch({}, {}, {}::jsonb, {}, {})",
         method_q, path_q, payload_q, agent_q, host_q);
 
-    exec_sql(pool_, req, resp, std::move(sql), on_fetch_result);
+    auto req_path = req.path;
+    exec_sql(pool_, req, resp, std::move(sql),
+        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), req_path);
+        });
 }
 
 // ─── authorized_fetch ───────────────────────────────────────────────────────
@@ -356,7 +374,11 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
             method_q, path_q, payload_q, agent_q, host_q);
     }
 
-    exec_sql(pool_, req, resp, std::move(sql), on_fetch_result);
+    auto req_path = req.path;
+    exec_sql(pool_, req, resp, std::move(sql),
+        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), req_path);
+        });
 }
 
 // ─── token_refresh_and_fetch ────────────────────────────────────────────────
