@@ -23,13 +23,14 @@ namespace apostol
 //
 // Shared by all fetch variants. Handles:
 //   - PG error → 500
-//   - empty result → 204
+//   - empty result → 200 with "{}"
 //   - #raw → binary response (base64-decoded)
 //   - PG-level error → appropriate HTTP status
 //   - normal JSON → 200
 //
 static void process_result(HttpResponse& resp,
-                           const std::vector<PgResult>& results)
+                           const std::vector<PgResult>& results,
+                           const std::string& path = {})
 {
     if (results.empty() || !results[0].ok()) {
         std::string err = results.empty()
@@ -42,7 +43,10 @@ static void process_result(HttpResponse& resp,
 
     const auto& res = results[0];
     if (res.rows() == 0 || res.columns() == 0) {
-        resp.set_status(HttpStatus::no_content);
+        // Paths containing "/list" return an empty array (front-end expects [])
+        auto empty_body = (path.find("/list") != std::string::npos) ? "[]" : "{}";
+        resp.set_status(HttpStatus::ok)
+            .set_body(empty_body, "application/json");
         return;
     }
 
@@ -97,7 +101,7 @@ static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
 {
     HttpResponse r;
     r.set_header("Content-Type", "application/json");
-    process_result(r, results);
+    process_result(r, results, path);
 
     // Clear auth cookies on sign-out
     if (!path.empty() && path.find("/sign/out") != std::string::npos)
