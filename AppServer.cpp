@@ -69,6 +69,9 @@ static void process_result(HttpResponse& resp,
             return;
         }
 
+        // For /list paths, ensure the response is always a JSON array
+        bool is_list = (path.find("/list") != std::string::npos);
+
         // Check for application-level error in PG response JSON
         std::string error_message;
         int error_code = check_pg_error(body, error_message);
@@ -76,6 +79,9 @@ static void process_result(HttpResponse& resp,
             resp.set_status(error_code_to_status(error_code))
                 .set_body(body, "application/json");
         } else {
+            if (is_list && !j.is_array()) {
+                body = "[" + body + "]";
+            }
             resp.set_status(HttpStatus::ok)
                 .set_body(body, "application/json");
         }
