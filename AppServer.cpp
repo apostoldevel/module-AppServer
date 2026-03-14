@@ -19,6 +19,37 @@
 namespace apostol
 {
 
+// ─── pg_result_to_json (mirrors ApostolModule::pg_result_to_json) ──────────
+//
+// Builds JSON from PG result: iterates all rows, wraps in [] when
+// format == "array" or rows > 1. Equivalent to v1 PQResultToJson.
+//
+static std::string pg_result_to_json(const PgResult& result, std::string_view format)
+{
+    const bool as_array = format == "array" || result.rows() > 1;
+    const char* empty_data = as_array ? "[]" : "{}";
+
+    if (result.rows() == 0)
+        return empty_data;
+
+    std::string json;
+    json.reserve(512);
+
+    if (as_array) json += '[';
+
+    for (int row = 0; row < result.rows(); ++row) {
+        if (row > 0) json += ',';
+        if (!result.is_null(row, 0))
+            json += result.value(row, 0);
+        else
+            json += as_array ? "null" : "{}";
+    }
+
+    if (as_array) json += ']';
+
+    return json;
+}
+
 // ─── Result processing (file-local) ────────────────────────────────────────
 //
 // Shared by all fetch variants. Handles:
@@ -42,54 +73,52 @@ static void process_result(HttpResponse& resp,
     }
 
     const auto& res = results[0];
+    const bool is_list = (path.find("/list") != std::string::npos);
+    const auto format = is_list ? "array" : "";
+
     if (res.rows() == 0 || res.columns() == 0) {
-        // Paths containing "/list" return an empty array (front-end expects [])
-        auto empty_body = (path.find("/list") != std::string::npos) ? "[]" : "{}";
         resp.set_status(HttpStatus::ok)
-            .set_body(empty_body, "application/json");
+            .set_body(pg_result_to_json(res, format), "application/json");
         return;
     }
 
-    const char* val = res.value(0, 0);
-    std::string body = val ? val : "null";
+    // Single row: check for #raw data and application-level errors
+    if (res.rows() == 1) {
+        const char* val = res.value(0, 0);
+        std::string body = val ? val : "null";
 
-    try {
-        auto j = nlohmann::json::parse(body);
+        try {
+            auto j = nlohmann::json::parse(body);
 
-        // Check for raw binary data: {"#raw":{"#status":200,"#content_type":"...","#data":"base64..."}}
-        if (j.contains("#raw") && j["#raw"].is_object()) {
-            const auto& raw = j["#raw"];
-            int status = raw.value("#status", 200);
-            auto ct    = raw.value("#content_type", "application/octet-stream");
-            auto data  = raw.value("#data", "");
-            auto decoded = base64_decode(data);
+            // Check for raw binary data: {"#raw":{"#status":200,"#content_type":"...","#data":"base64..."}}
+            if (j.contains("#raw") && j["#raw"].is_object()) {
+                const auto& raw = j["#raw"];
+                int status = raw.value("#status", 200);
+                auto ct    = raw.value("#content_type", "application/octet-stream");
+                auto data  = raw.value("#data", "");
+                auto decoded = base64_decode(data);
 
-            resp.set_status(status, "");
-            resp.set_body(std::move(decoded), ct);
-            return;
-        }
-
-        // For /list paths, ensure the response is always a JSON array
-        bool is_list = (path.find("/list") != std::string::npos);
-
-        // Check for application-level error in PG response JSON
-        std::string error_message;
-        int error_code = check_pg_error(body, error_message);
-        if (error_code != 0) {
-            resp.set_status(error_code_to_status(error_code))
-                .set_body(body, "application/json");
-        } else {
-            if (is_list && !j.is_array()) {
-                body = "[" + body + "]";
+                resp.set_status(status, "");
+                resp.set_body(std::move(decoded), ct);
+                return;
             }
-            resp.set_status(HttpStatus::ok)
-                .set_body(body, "application/json");
+
+            // Check for application-level error in PG response JSON
+            std::string error_message;
+            int error_code = check_pg_error(body, error_message);
+            if (error_code != 0) {
+                resp.set_status(error_code_to_status(error_code))
+                    .set_body(body, "application/json");
+                return;
+            }
+        } catch (const nlohmann::json::exception&) {
+            // Not valid JSON — fall through to pg_result_to_json
         }
-    } catch (const nlohmann::json::exception&) {
-        // Not valid JSON — return as-is
-        resp.set_status(HttpStatus::ok)
-            .set_body(body, "application/json");
     }
+
+    // Use pg_result_to_json for all cases: handles multi-row, array wrapping, null values
+    resp.set_status(HttpStatus::ok)
+        .set_body(pg_result_to_json(res, format), "application/json");
 }
 
 /// Clear auth cookies on sign-out.
