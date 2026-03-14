@@ -19,36 +19,10 @@
 namespace apostol
 {
 
-// ─── pg_result_to_json (mirrors ApostolModule::pg_result_to_json) ──────────
-//
-// Builds JSON from PG result: iterates all rows, wraps in [] when
-// format == "array" or rows > 1. Equivalent to v1 PQResultToJson.
-//
-static std::string pg_result_to_json(const PgResult& result, std::string_view format)
-{
-    const bool as_array = format == "array" || result.rows() > 1;
-    const char* empty_data = as_array ? "[]" : "{}";
-
-    if (result.rows() == 0)
-        return empty_data;
-
-    std::string json;
-    json.reserve(512);
-
-    if (as_array) json += '[';
-
-    for (int row = 0; row < result.rows(); ++row) {
-        if (row > 0) json += ',';
-        if (!result.is_null(row, 0))
-            json += result.value(row, 0);
-        else
-            json += as_array ? "null" : "{}";
-    }
-
-    if (as_array) json += ']';
-
-    return json;
-}
+static constexpr const char* kCookieAT  = "__Secure-AT";
+static constexpr const char* kCookieRT  = "__Secure-RT";
+static constexpr const char* kCookieSID = "SID";
+static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
 
 // ─── Result processing (file-local) ────────────────────────────────────────
 //
@@ -124,9 +98,9 @@ static void process_result(HttpResponse& resp,
 /// Clear auth cookies on sign-out.
 static void clear_secure(HttpResponse& resp)
 {
-    resp.set_cookie("__Secure-AT", "", "/", -1, true, "None", true);
-    resp.set_cookie("__Secure-RT", "", "/", -1, true, "None", true);
-    resp.set_cookie("SID", "", "/", -1);
+    resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true);
+    resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true);
+    resp.set_cookie(kCookieSID, "", "/", -1);
 }
 
 /// PgResultHandler that processes result and sends response.
@@ -325,14 +299,14 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
     }
 
     // Priority 3: Cookie-based tokens
-    auto access_token = req.cookie("__Secure-AT");
+    auto access_token = req.cookie(kCookieAT);
 
     if (!access_token.empty()) {
         auth.schema = Authorization::Schema::bearer;
         auth.token  = std::move(access_token);
         auth_type = AuthType::bearer;
 
-        refresh_token = url_decode(req.cookie("__Secure-RT"));
+        refresh_token = url_decode(req.cookie(kCookieRT));
 
         try {
             verify_jwt(auth.token, providers_);
@@ -533,13 +507,13 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
                         // Set secure cookies with refreshed tokens
                         if (!new_token.empty())
-                            r2.set_cookie("__Secure-AT", new_token, "/",
-                                         60 * 86400, true, "None", true);
+                            r2.set_cookie(kCookieAT, new_token, "/",
+                                         kCookieMaxAge, true, "None", true);
                         if (!new_refresh.empty())
-                            r2.set_cookie("__Secure-RT", new_refresh, "/",
-                                         60 * 86400, true, "None", true);
+                            r2.set_cookie(kCookieRT, new_refresh, "/",
+                                         kCookieMaxAge, true, "None", true);
                         if (!session_id.empty())
-                            r2.set_cookie("SID", session_id, "/", 60 * 86400);
+                            r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
 
                         process_result(r2, results2);
                         conn->send_response(r2);
