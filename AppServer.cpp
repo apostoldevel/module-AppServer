@@ -123,7 +123,6 @@ static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
 
 AppServer::AppServer(Application& app)
     : pool_(app.db_pool())
-    , loop_(app.worker_loop())
     , providers_(app.providers())
     , enabled_(true)
 {

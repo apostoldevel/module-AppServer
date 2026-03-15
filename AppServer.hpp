@@ -93,7 +93,6 @@ private:
     // ── State ───────────────────────────────────────────────────────────────
 
     PgPool&                   pool_;
-    EventLoop&                loop_;
     const OAuthProviders&     providers_;
     std::vector<std::string>  endpoints_;
     bool                      enabled_;
