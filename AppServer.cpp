@@ -19,17 +19,23 @@
 namespace apostol
 {
 
+static constexpr const char* kCookieAT  = "__Secure-AT";
+static constexpr const char* kCookieRT  = "__Secure-RT";
+static constexpr const char* kCookieSID = "SID";
+static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
+
 // ─── Result processing (file-local) ────────────────────────────────────────
 //
 // Shared by all fetch variants. Handles:
 //   - PG error → 500
-//   - empty result → 204
+//   - empty result → 200 with "{}"
 //   - #raw → binary response (base64-decoded)
 //   - PG-level error → appropriate HTTP status
 //   - normal JSON → 200
 //
 static void process_result(HttpResponse& resp,
-                           const std::vector<PgResult>& results)
+                           const std::vector<PgResult>& results,
+                           const std::string& path = {})
 {
     if (results.empty() || !results[0].ok()) {
         std::string err = results.empty()
@@ -41,54 +47,75 @@ static void process_result(HttpResponse& resp,
     }
 
     const auto& res = results[0];
+    const bool is_list = (path.find("/list") != std::string::npos);
+    const auto format = is_list ? "array" : "";
+
     if (res.rows() == 0 || res.columns() == 0) {
-        resp.set_status(HttpStatus::no_content);
+        resp.set_status(HttpStatus::ok)
+            .set_body(pg_result_to_json(res, format), "application/json");
         return;
     }
 
-    const char* val = res.value(0, 0);
-    std::string body = val ? val : "null";
+    // Single row: check for #raw data and application-level errors
+    if (res.rows() == 1) {
+        const char* val = res.value(0, 0);
+        std::string body = val ? val : "null";
 
-    try {
-        auto j = nlohmann::json::parse(body);
+        try {
+            auto j = nlohmann::json::parse(body);
 
-        // Check for raw binary data: {"#raw":{"#status":200,"#content_type":"...","#data":"base64..."}}
-        if (j.contains("#raw") && j["#raw"].is_object()) {
-            const auto& raw = j["#raw"];
-            int status = raw.value("#status", 200);
-            auto ct    = raw.value("#content_type", "application/octet-stream");
-            auto data  = raw.value("#data", "");
-            auto decoded = base64_decode(data);
+            // Check for raw binary data: {"#raw":{"#status":200,"#content_type":"...","#data":"base64..."}}
+            if (j.contains("#raw") && j["#raw"].is_object()) {
+                const auto& raw = j["#raw"];
+                int status = raw.value("#status", 200);
+                auto ct    = raw.value("#content_type", "application/octet-stream");
+                auto data  = raw.value("#data", "");
+                auto decoded = base64_decode(data);
 
-            resp.set_status(status, "");
-            resp.set_body(std::move(decoded), ct);
-            return;
+                resp.set_status(status, "");
+                resp.set_body(std::move(decoded), ct);
+                return;
+            }
+
+            // Check for application-level error in PG response JSON
+            std::string error_message;
+            int error_code = check_pg_error(body, error_message);
+            if (error_code != 0) {
+                resp.set_status(error_code_to_status(error_code))
+                    .set_body(body, "application/json");
+                return;
+            }
+        } catch (const nlohmann::json::exception&) {
+            // Not valid JSON — fall through to pg_result_to_json
         }
-
-        // Check for application-level error in PG response JSON
-        std::string error_message;
-        int error_code = check_pg_error(body, error_message);
-        if (error_code != 0) {
-            resp.set_status(error_code_to_status(error_code))
-                .set_body(body, "application/json");
-        } else {
-            resp.set_status(HttpStatus::ok)
-                .set_body(body, "application/json");
-        }
-    } catch (const nlohmann::json::exception&) {
-        // Not valid JSON — return as-is
-        resp.set_status(HttpStatus::ok)
-            .set_body(body, "application/json");
     }
+
+    // Use pg_result_to_json for all cases: handles multi-row, array wrapping, null values
+    resp.set_status(HttpStatus::ok)
+        .set_body(pg_result_to_json(res, format), "application/json");
+}
+
+/// Clear auth cookies on sign-out.
+static void clear_secure(HttpResponse& resp)
+{
+    resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true);
+    resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true);
+    resp.set_cookie(kCookieSID, "", "/", -1);
 }
 
 /// PgResultHandler that processes result and sends response.
 static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
-                            std::vector<PgResult> results)
+                            std::vector<PgResult> results,
+                            const std::string& path = {})
 {
     HttpResponse r;
     r.set_header("Content-Type", "application/json");
-    process_result(r, results);
+    process_result(r, results, path);
+
+    // Clear auth cookies on sign-out
+    if (!path.empty() && path.find("/sign/out") != std::string::npos)
+        clear_secure(r);
+
     conn->send_response(r);
 }
 
@@ -96,7 +123,6 @@ static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
 
 AppServer::AppServer(Application& app)
     : pool_(app.db_pool())
-    , loop_(app.worker_loop())
     , providers_(app.providers())
     , enabled_(true)
 {
@@ -272,14 +298,14 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
     }
 
     // Priority 3: Cookie-based tokens
-    auto access_token = req.cookie("__Secure-AT");
+    auto access_token = req.cookie(kCookieAT);
 
     if (!access_token.empty()) {
         auth.schema = Authorization::Schema::bearer;
         auth.token  = std::move(access_token);
         auth_type = AuthType::bearer;
 
-        refresh_token = url_decode(req.cookie("__Secure-RT"));
+        refresh_token = url_decode(req.cookie(kCookieRT));
 
         try {
             verify_jwt(auth.token, providers_);
@@ -317,7 +343,11 @@ void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
         "SELECT * FROM daemon.unauthorized_fetch({}, {}, {}::jsonb, {}, {})",
         method_q, path_q, payload_q, agent_q, host_q);
 
-    exec_sql(pool_, req, resp, std::move(sql), on_fetch_result);
+    auto req_path = req.path;
+    exec_sql(pool_, req, resp, std::move(sql),
+        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), req_path);
+        });
 }
 
 // ─── authorized_fetch ───────────────────────────────────────────────────────
@@ -356,7 +386,11 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
             method_q, path_q, payload_q, agent_q, host_q);
     }
 
-    exec_sql(pool_, req, resp, std::move(sql), on_fetch_result);
+    auto req_path = req.path;
+    exec_sql(pool_, req, resp, std::move(sql),
+        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), req_path);
+        });
 }
 
 // ─── token_refresh_and_fetch ────────────────────────────────────────────────
@@ -374,17 +408,16 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
         pq_quote_literal(refresh_token));
 
     // Capture values needed for the chained second query
-    auto method_str   = std::string(method);
-    auto payload_str  = payload;
-    auto path_str     = req.path;
-    auto agent_str    = get_user_agent(req);
-    auto host_str     = get_real_ip(req);
-    auto hostname_str = get_host(req);
+    auto method_str  = std::string(method);
+    auto payload_str = payload;
+    auto path_str    = req.path;
+    auto agent_str   = get_user_agent(req);
+    auto host_str    = get_real_ip(req);
 
     auto pool_ptr = &pool_;
 
     exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname_str]
+        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str]
         (std::shared_ptr<HttpConnection> conn,
          std::vector<PgResult> results) {
 
@@ -466,22 +499,20 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
                 // Chain: second PG query using the refreshed token
                 pool_ptr->execute(std::move(fetch_sql),
-                    [conn, new_token, new_refresh, session_id, hostname_str]
+                    [conn, new_token, new_refresh, session_id]
                     (std::vector<PgResult> results2) {
                         HttpResponse r2;
                         r2.set_header("Content-Type", "application/json");
 
                         // Set secure cookies with refreshed tokens
                         if (!new_token.empty())
-                            r2.set_cookie("__Secure-AT", new_token, "/",
-                                         60 * 86400, true, "None", true,
-                                         hostname_str);
+                            r2.set_cookie(kCookieAT, new_token, "/",
+                                         kCookieMaxAge, true, "None", true);
                         if (!new_refresh.empty())
-                            r2.set_cookie("__Secure-RT", new_refresh, "/",
-                                         60 * 86400, true, "None", true,
-                                         hostname_str);
+                            r2.set_cookie(kCookieRT, new_refresh, "/",
+                                         kCookieMaxAge, true, "None", true);
                         if (!session_id.empty())
-                            r2.set_cookie("SID", session_id, "/", 60 * 86400);
+                            r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
 
                         process_result(r2, results2);
                         conn->send_response(r2);
