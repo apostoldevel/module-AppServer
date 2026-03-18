@@ -95,18 +95,26 @@ static void process_result(HttpResponse& resp,
         .set_body(pg_result_to_json(res, format), "application/json");
 }
 
-/// Clear auth cookies on sign-out.
-static void clear_secure(HttpResponse& resp)
+/// Clear auth cookies on sign-out (both host-only and domain-scoped to fix duplicates).
+static void clear_secure(HttpResponse& resp, const std::string& hostname = {})
 {
+    // Clear host-only cookies (no Domain attribute)
     resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieSID, "", "/", -1);
+
+    // Also clear domain-scoped cookies to remove any duplicates
+    if (!hostname.empty()) {
+        resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true, hostname);
+        resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true, hostname);
+    }
 }
 
 /// PgResultHandler that processes result and sends response.
 static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
                             std::vector<PgResult> results,
-                            const std::string& path = {})
+                            const std::string& path = {},
+                            const std::string& hostname = {})
 {
     HttpResponse r;
     r.set_header("Content-Type", "application/json");
@@ -114,7 +122,7 @@ static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
 
     // Clear auth cookies on sign-out
     if (!path.empty() && path.find("/sign/out") != std::string::npos)
-        clear_secure(r);
+        clear_secure(r, hostname);
 
     conn->send_response(r);
 }
@@ -387,9 +395,10 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
     }
 
     auto req_path = req.path;
+    auto req_host = get_host(req);
     exec_sql(pool_, req, resp, std::move(sql),
-        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
-            on_fetch_result(std::move(conn), std::move(results), req_path);
+        [req_path, req_host](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), req_path, req_host);
         });
 }
 
@@ -413,11 +422,12 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
     auto path_str    = req.path;
     auto agent_str   = get_user_agent(req);
     auto host_str    = get_real_ip(req);
+    auto hostname    = get_host(req);
 
     auto pool_ptr = &pool_;
 
     exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str]
+        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname]
         (std::shared_ptr<HttpConnection> conn,
          std::vector<PgResult> results) {
 
@@ -499,18 +509,18 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
                 // Chain: second PG query using the refreshed token
                 pool_ptr->execute(std::move(fetch_sql),
-                    [conn, new_token, new_refresh, session_id]
+                    [conn, new_token, new_refresh, session_id, hostname]
                     (std::vector<PgResult> results2) {
                         HttpResponse r2;
                         r2.set_header("Content-Type", "application/json");
 
-                        // Set secure cookies with refreshed tokens
+                        // Set secure cookies with refreshed tokens (with domain to match AuthServer)
                         if (!new_token.empty())
                             r2.set_cookie(kCookieAT, new_token, "/",
-                                         kCookieMaxAge, true, "None", true);
+                                         kCookieMaxAge, true, "None", true, hostname);
                         if (!new_refresh.empty())
                             r2.set_cookie(kCookieRT, new_refresh, "/",
-                                         kCookieMaxAge, true, "None", true);
+                                         kCookieMaxAge, true, "None", true, hostname);
                         if (!session_id.empty())
                             r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
 
