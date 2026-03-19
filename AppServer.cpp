@@ -514,13 +514,13 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                         HttpResponse r2;
                         r2.set_header("Content-Type", "application/json");
 
-                        // Set secure cookies with refreshed tokens (with domain to match AuthServer)
+                        // Set secure cookies with refreshed tokens (host-only, no Domain attr)
                         if (!new_token.empty())
                             r2.set_cookie(kCookieAT, new_token, "/",
-                                         kCookieMaxAge, true, "None", true, hostname);
+                                         kCookieMaxAge, true, "None", true);
                         if (!new_refresh.empty())
                             r2.set_cookie(kCookieRT, new_refresh, "/",
-                                         kCookieMaxAge, true, "None", true, hostname);
+                                         kCookieMaxAge, true, "None", true);
                         if (!session_id.empty())
                             r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
 
