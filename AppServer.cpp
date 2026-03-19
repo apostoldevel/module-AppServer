@@ -174,7 +174,8 @@ void AppServer::do_get(const HttpRequest& req, HttpResponse& resp)
 {
     // Special routes (mirrors v1 DoGet)
     if (req.path == "/api/v1/ping") {
-        resp.set_status(HttpStatus::ok).set_body("{}", "application/json");
+        resp.set_status(HttpStatus::ok)
+            .set_body(R"({"error":{"code":200,"message":"OK"}})", "application/json");
         return;
     }
 
