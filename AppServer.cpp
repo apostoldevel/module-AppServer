@@ -95,26 +95,18 @@ static void process_result(HttpResponse& resp,
         .set_body(pg_result_to_json(res, format), "application/json");
 }
 
-/// Clear auth cookies on sign-out (both host-only and domain-scoped to fix duplicates).
-static void clear_secure(HttpResponse& resp, const std::string& hostname = {})
+/// Clear auth cookies on sign-out.
+static void clear_secure(HttpResponse& resp)
 {
-    // Clear host-only cookies (no Domain attribute)
     resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieSID, "", "/", -1);
-
-    // Also clear domain-scoped cookies to remove any duplicates
-    if (!hostname.empty()) {
-        resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true, hostname);
-        resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true, hostname);
-    }
 }
 
 /// PgResultHandler that processes result and sends response.
 static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
                             std::vector<PgResult> results,
-                            const std::string& path = {},
-                            const std::string& hostname = {})
+                            const std::string& path = {})
 {
     HttpResponse r;
     r.set_header("Content-Type", "application/json");
@@ -122,7 +114,7 @@ static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
 
     // Clear auth cookies on sign-out
     if (!path.empty() && path.find("/sign/out") != std::string::npos)
-        clear_secure(r, hostname);
+        clear_secure(r);
 
     conn->send_response(r);
 }
@@ -396,10 +388,9 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
     }
 
     auto req_path = req.path;
-    auto req_host = get_host(req);
     exec_sql(pool_, req, resp, std::move(sql),
-        [req_path, req_host](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
-            on_fetch_result(std::move(conn), std::move(results), req_path, req_host);
+        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), req_path);
         });
 }
 
