@@ -314,7 +314,7 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
         auth.token  = std::move(access_token);
         auth_type = AuthType::bearer;
 
-        refresh_token = url_decode(req.cookie(kCookieRT));
+        refresh_token = req.cookie(kCookieRT);
 
         try {
             verify_jwt(auth.token, providers_);
