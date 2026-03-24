@@ -21,6 +21,8 @@ namespace apostol
 
 static constexpr const char* kCookieAT  = "__Secure-AT";
 static constexpr const char* kCookieRT  = "__Secure-RT";
+static constexpr const char* kCookieSAT = "__Secure-SAT";
+static constexpr const char* kCookieSRT = "__Secure-SRT";
 static constexpr const char* kCookieSID = "SID";
 static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
 
@@ -95,11 +97,13 @@ static void process_result(HttpResponse& resp,
         .set_body(pg_result_to_json(res, format), "application/json");
 }
 
-/// Clear auth cookies on sign-out.
+/// Clear auth cookies on sign-out (both user and service pairs).
 static void clear_secure(HttpResponse& resp)
 {
     resp.set_cookie(kCookieAT,  "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true);
+    resp.set_cookie(kCookieSAT, "", "/", -1, true, "None", true);
+    resp.set_cookie(kCookieSRT, "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieSID, "", "/", -1);
 }
 
@@ -230,8 +234,9 @@ void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
     Authorization auth;
     AuthType auth_type = AuthType::none;
     std::string refresh_token;
+    bool is_service = false;
 
-    int result = check_auth(req, resp, auth, auth_type, refresh_token);
+    int result = check_auth(req, resp, auth, auth_type, refresh_token, is_service);
 
     switch (result) {
         case 0:
@@ -242,7 +247,7 @@ void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
             break;
         case 2:
             token_refresh_and_fetch(req, resp, auth, refresh_token,
-                                    method, payload);
+                                    method, payload, is_service);
             break;
         case -1:
             // resp already set (401/403)
@@ -254,7 +259,7 @@ void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
 
 int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
                            Authorization& auth, AuthType& auth_type,
-                           std::string& refresh_token)
+                           std::string& refresh_token, bool& is_service)
 {
     // Priority 1: Authorization header
     auto auth_header = req.header("Authorization");
@@ -298,15 +303,18 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
         return 1;
     }
 
-    // Priority 3: Cookie-based tokens
-    auto access_token = req.cookie(kCookieAT);
+    // Priority 3: Cookie-based tokens (user or service, selected by X-Auth-Context)
+    auto context = req.header("X-Auth-Context");
+    is_service = (context == "service");
+
+    auto access_token = req.cookie(is_service ? kCookieSAT : kCookieAT);
 
     if (!access_token.empty()) {
         auth.schema = Authorization::Schema::bearer;
         auth.token  = std::move(access_token);
         auth_type = AuthType::bearer;
 
-        refresh_token = req.cookie(kCookieRT);
+        refresh_token = req.cookie(is_service ? kCookieSRT : kCookieRT);
 
         try {
             verify_jwt(auth.token, providers_);
@@ -400,7 +408,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                                          const Authorization& auth,
                                          const std::string& refresh_token,
                                          std::string_view method,
-                                         const std::string& payload)
+                                         const std::string& payload,
+                                         bool is_service)
 {
     // Step 1: refresh the token via daemon.refresh_token(token, refresh_token)
     auto refresh_sql = fmt::format(
@@ -419,7 +428,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
     auto pool_ptr = &pool_;
 
     exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname]
+        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname, is_service]
         (std::shared_ptr<HttpConnection> conn,
          std::vector<PgResult> results) {
 
@@ -501,19 +510,22 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
                 // Chain: second PG query using the refreshed token
                 pool_ptr->execute(std::move(fetch_sql),
-                    [conn, new_token, new_refresh, session_id, hostname]
+                    [conn, new_token, new_refresh, session_id, hostname, is_service]
                     (std::vector<PgResult> results2) {
                         HttpResponse r2;
                         r2.set_header("Content-Type", "application/json");
 
-                        // Set secure cookies with refreshed tokens (host-only, no Domain attr)
+                        // Set secure cookies with refreshed tokens
+                        auto at_name = is_service ? kCookieSAT : kCookieAT;
+                        auto rt_name = is_service ? kCookieSRT : kCookieRT;
+
                         if (!new_token.empty())
-                            r2.set_cookie(kCookieAT, new_token, "/",
+                            r2.set_cookie(at_name, new_token, "/",
                                          kCookieMaxAge, true, "None", true);
                         if (!new_refresh.empty())
-                            r2.set_cookie(kCookieRT, new_refresh, "/",
+                            r2.set_cookie(rt_name, new_refresh, "/",
                                          kCookieMaxAge, true, "None", true);
-                        if (!session_id.empty())
+                        if (!session_id.empty() && !is_service)
                             r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
 
                         process_result(r2, results2);

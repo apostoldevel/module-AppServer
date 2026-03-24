@@ -67,7 +67,7 @@ private:
     //           -1 = error (resp already set with 401/403)
     int check_auth(const HttpRequest& req, HttpResponse& resp,
                    Authorization& auth, AuthType& auth_type,
-                   std::string& refresh_token);
+                   std::string& refresh_token, bool& is_service);
 
     // ── Fetch variants → build SQL → exec_sql() ────────────────────────────
 
@@ -84,7 +84,8 @@ private:
                                  const Authorization& auth,
                                  const std::string& refresh_token,
                                  std::string_view method,
-                                 const std::string& payload);
+                                 const std::string& payload,
+                                 bool is_service = false);
 
     // ── Payload building ────────────────────────────────────────────────────
 
