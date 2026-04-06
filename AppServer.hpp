@@ -16,6 +16,7 @@ namespace apostol
 {
 
 class Application;
+struct ResultShaping;
 
 // ─── AppServer ──────────────────────────────────────────────────────────────
 //
@@ -73,19 +74,22 @@ private:
 
     void unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
                             std::string_view method,
-                            const std::string& payload);
+                            const std::string& payload,
+                            const ResultShaping& shaping);
 
     void authorized_fetch(const HttpRequest& req, HttpResponse& resp,
                           const Authorization& auth, AuthType auth_type,
                           std::string_view method,
-                          const std::string& payload);
+                          const std::string& payload,
+                          const ResultShaping& shaping);
 
     void token_refresh_and_fetch(const HttpRequest& req, HttpResponse& resp,
                                  const Authorization& auth,
                                  const std::string& refresh_token,
                                  std::string_view method,
                                  const std::string& payload,
-                                 bool is_service = false);
+                                 bool is_service,
+                                 const ResultShaping& shaping);
 
     // ── Payload building ────────────────────────────────────────────────────
 

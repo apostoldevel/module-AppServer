@@ -26,6 +26,53 @@ static constexpr const char* kCookieSRT = "__Secure-SRT";
 static constexpr const char* kCookieSID = "SID";
 static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
 
+// ─── Response shaping parameters ───────────────────────────────────────────
+//
+// Optional query parameters that control how PostgreSQL results are serialised:
+//   result_object  — "true" wraps the result in {"result": ...}
+//   result_format  — "object", "array", or "null" forces the serialisation format
+//                    Paths containing "/list" default to "array".
+//
+struct ResultShaping
+{
+    std::string format;       // "", "object", "array", or "null"
+    std::string object_name;  // "result" when result_object=true, else empty
+
+    /// Parse and validate from request query parameters.
+    /// Returns false and sets resp to 400 on invalid values.
+    static bool parse(const HttpRequest& req, const std::string& path,
+                      ResultShaping& out, HttpResponse& resp)
+    {
+        auto result_object = req.param("result_object");
+        auto result_format = req.param("result_format");
+
+        if (!result_object.empty()
+            && result_object != "true" && result_object != "false") {
+            reply_error(resp, HttpStatus::bad_request,
+                        fmt::format("Invalid result_object: {}", result_object));
+            return false;
+        }
+
+        if (!result_format.empty()
+            && result_format != "object" && result_format != "array"
+            && result_format != "null") {
+            reply_error(resp, HttpStatus::bad_request,
+                        fmt::format("Invalid result_format: {}", result_format));
+            return false;
+        }
+
+        out.object_name = (result_object == "true") ? "result" : "";
+
+        if (!result_format.empty()) {
+            out.format = result_format;
+        } else if (path.find("/list") != std::string::npos) {
+            out.format = "array";
+        }
+
+        return true;
+    }
+};
+
 // ─── Result processing (file-local) ────────────────────────────────────────
 //
 // Shared by all fetch variants. Handles:
@@ -37,7 +84,7 @@ static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
 //
 static void process_result(HttpResponse& resp,
                            const std::vector<PgResult>& results,
-                           const std::string& path = {})
+                           const ResultShaping& shaping = {})
 {
     if (results.empty() || !results[0].ok()) {
         std::string err = results.empty()
@@ -49,12 +96,11 @@ static void process_result(HttpResponse& resp,
     }
 
     const auto& res = results[0];
-    const bool is_list = (path.find("/list") != std::string::npos);
-    const auto format = is_list ? "array" : "";
 
     if (res.rows() == 0 || res.columns() == 0) {
         resp.set_status(HttpStatus::ok)
-            .set_body(pg_result_to_json(res, format), "application/json");
+            .set_body(pg_result_to_json(res, shaping.format, shaping.object_name),
+                      "application/json");
         return;
     }
 
@@ -94,7 +140,8 @@ static void process_result(HttpResponse& resp,
 
     // Use pg_result_to_json for all cases: handles multi-row, array wrapping, null values
     resp.set_status(HttpStatus::ok)
-        .set_body(pg_result_to_json(res, format), "application/json");
+        .set_body(pg_result_to_json(res, shaping.format, shaping.object_name),
+                  "application/json");
 }
 
 /// Clear auth cookies on sign-out (both user and service pairs).
@@ -110,11 +157,12 @@ static void clear_secure(HttpResponse& resp)
 /// PgResultHandler that processes result and sends response.
 static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
                             std::vector<PgResult> results,
+                            const ResultShaping& shaping = {},
                             const std::string& path = {})
 {
     HttpResponse r;
     r.set_header("Content-Type", "application/json");
-    process_result(r, results, path);
+    process_result(r, results, shaping);
 
     // Clear auth cookies on sign-out
     if (!path.empty() && path.find("/sign/out") != std::string::npos)
@@ -229,6 +277,11 @@ std::string AppServer::build_payload(const HttpRequest& req)
 void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
                           std::string_view method)
 {
+    // Validate response shaping parameters before doing any work
+    ResultShaping shaping;
+    if (!ResultShaping::parse(req, req.path, shaping, resp))
+        return;  // resp already set to 400
+
     auto payload = build_payload(req);
 
     Authorization auth;
@@ -240,14 +293,14 @@ void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
 
     switch (result) {
         case 0:
-            unauthorized_fetch(req, resp, method, payload);
+            unauthorized_fetch(req, resp, method, payload, shaping);
             break;
         case 1:
-            authorized_fetch(req, resp, auth, auth_type, method, payload);
+            authorized_fetch(req, resp, auth, auth_type, method, payload, shaping);
             break;
         case 2:
             token_refresh_and_fetch(req, resp, auth, refresh_token,
-                                    method, payload, is_service);
+                                    method, payload, is_service, shaping);
             break;
         case -1:
             // resp already set (401/403)
@@ -339,7 +392,8 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
 
 void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
                                     std::string_view method,
-                                    const std::string& payload)
+                                    const std::string& payload,
+                                    const ResultShaping& shaping)
 {
     auto method_q  = pq_quote_literal(method);
     auto path_q    = pq_quote_literal(req.path);
@@ -354,8 +408,8 @@ void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
 
     auto req_path = req.path;
     exec_sql(pool_, req, resp, std::move(sql),
-        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
-            on_fetch_result(std::move(conn), std::move(results), req_path);
+        [req_path, shaping](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), shaping, req_path);
         });
 }
 
@@ -364,7 +418,8 @@ void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
 void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
                                   const Authorization& auth, AuthType auth_type,
                                   std::string_view method,
-                                  const std::string& payload)
+                                  const std::string& payload,
+                                  const ResultShaping& shaping)
 {
     auto method_q  = pq_quote_literal(method);
     auto path_q    = pq_quote_literal(req.path);
@@ -397,8 +452,8 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
 
     auto req_path = req.path;
     exec_sql(pool_, req, resp, std::move(sql),
-        [req_path](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
-            on_fetch_result(std::move(conn), std::move(results), req_path);
+        [req_path, shaping](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
+            on_fetch_result(std::move(conn), std::move(results), shaping, req_path);
         });
 }
 
@@ -409,7 +464,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                                          const std::string& refresh_token,
                                          std::string_view method,
                                          const std::string& payload,
-                                         bool is_service)
+                                         bool is_service,
+                                         const ResultShaping& shaping)
 {
     // Step 1: refresh the token via daemon.refresh_token(token, refresh_token)
     auto refresh_sql = fmt::format(
@@ -428,7 +484,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
     auto pool_ptr = &pool_;
 
     exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname, is_service]
+        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname, is_service, shaping]
         (std::shared_ptr<HttpConnection> conn,
          std::vector<PgResult> results) {
 
@@ -510,7 +566,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
                 // Chain: second PG query using the refreshed token
                 pool_ptr->execute(std::move(fetch_sql),
-                    [conn, new_token, new_refresh, session_id, hostname, is_service]
+                    [conn, new_token, new_refresh, session_id, hostname, is_service, shaping]
                     (std::vector<PgResult> results2) {
                         HttpResponse r2;
                         r2.set_header("Content-Type", "application/json");
@@ -528,7 +584,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                         if (!session_id.empty() && !is_service)
                             r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
 
-                        process_result(r2, results2);
+                        process_result(r2, results2, shaping);
                         conn->send_response(r2);
                     },
                     // on_exception for chained fetch
