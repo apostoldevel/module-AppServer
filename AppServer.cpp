@@ -553,7 +553,7 @@ namespace Apostol {
                     auto pResult = APollQuery->Results(0);
 
                     if (pResult->ExecStatus() != PGRES_TUPLES_OK) {
-                        throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
+                        throw Delphi::Exception::EDBError("%s", pResult->GetErrorMessage());
                     }
 
                     pConnection->Data().Values("payload", pResult->GetValue(0, 0));
