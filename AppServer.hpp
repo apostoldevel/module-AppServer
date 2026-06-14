@@ -8,6 +8,7 @@
 #include "apostol/oauth_providers.hpp"
 #include "apostol/pg.hpp"
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,6 +39,22 @@ public:
     bool enabled() const override { return enabled_; }
     bool check_location(const HttpRequest& req) const override;
     void heartbeat(std::chrono::system_clock::time_point) override {}
+
+    // ── Payload transform hook ──────────────────────────────────────────────
+    //
+    // Optional transform applied to the request payload (the JSON body produced
+    // by build_payload) before it is dispatched to PostgreSQL. Generic by design
+    // — e.g. a transformer that downscales base64 images embedded in the body.
+    // Receives the request (for path/headers) and the current payload, and
+    // returns the payload to dispatch. Transformers should not throw; if one
+    // does, do_fetch maps the failure to HTTP 400.
+    using PayloadTransformer =
+        std::function<std::string(const HttpRequest&, std::string)>;
+
+    void set_payload_transformer(PayloadTransformer fn)
+    {
+        payload_transformer_ = std::move(fn);
+    }
 
 protected:
     void init_methods() override;
@@ -101,6 +118,7 @@ private:
     const OAuthProviders&     providers_;
     std::vector<std::string>  endpoints_;
     bool                      enabled_;
+    PayloadTransformer        payload_transformer_;
 };
 
 } // namespace apostol

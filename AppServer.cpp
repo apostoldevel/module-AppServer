@@ -284,6 +284,16 @@ void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
 
     auto payload = build_payload(req);
 
+    if (payload_transformer_ && !payload.empty()) {
+        try {
+            payload = payload_transformer_(req, std::move(payload));
+        } catch (const std::exception& e) {
+            reply_error(resp, HttpStatus::bad_request,
+                        fmt::format("Payload transform failed: {}", e.what()));
+            return;
+        }
+    }
+
     Authorization auth;
     AuthType auth_type = AuthType::none;
     std::string refresh_token;
