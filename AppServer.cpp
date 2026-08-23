@@ -461,10 +461,16 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
     }
 
     auto req_path = req.path;
+
+    // quiet: depending on the branch above the statement carries an access token,
+    // a session code with its secret, or a username and password. PgPool logs
+    // statement text, and a dedicated postgres.log keeps it at debug — this runs on
+    // every API request, so it would be a continuous credential leak into that file.
     exec_sql(pool_, req, resp, std::move(sql),
         [req_path, shaping](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
             on_fetch_result(std::move(conn), std::move(results), shaping, req_path);
-        });
+        },
+        /*quiet=*/true);
 }
 
 // ─── token_refresh_and_fetch ────────────────────────────────────────────────
@@ -574,7 +580,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                     "SELECT * FROM daemon.fetch({}, {}, {}, {}::jsonb, {}, {})",
                     token_q, method_q, path_q, payload_q, agent_q, host_q);
 
-                // Chain: second PG query using the refreshed token
+                // Chain: second PG query using the refreshed token.
+                // quiet: fetch_sql carries that token.
                 pool_ptr->execute(std::move(fetch_sql),
                     [conn, new_token, new_refresh, session_id, hostname, is_service, shaping]
                     (std::vector<PgResult> results2) {
@@ -602,7 +609,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                         HttpResponse r2;
                         reply_error(r2, HttpStatus::internal_server_error, error);
                         conn->send_response(r2);
-                    });
+                    },
+                    /*quiet=*/true);
 
             } catch (const nlohmann::json::exception& e) {
                 reply_error(r, HttpStatus::internal_server_error,
