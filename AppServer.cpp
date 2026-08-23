@@ -129,7 +129,19 @@ static void process_result(HttpResponse& resp,
             std::string error_message;
             int error_code = check_pg_error(body, error_message);
             if (error_code != 0) {
-                resp.set_status(error_code_to_status(error_code))
+                const auto status = error_code_to_status(error_code);
+
+                // The body is the database's answer and is forwarded as it stands.
+                // What was missing is the header: RFC 6750 §3 wants the challenge on
+                // every 401 a resource server sends, and this path — an expired
+                // token reported by db-platform rather than caught here — is one.
+                // The scheme is advertised whatever the caller used to authenticate;
+                // RFC 7235 §4.1 is about what the server accepts, not about what
+                // this request tried.
+                if (status == HttpStatus::unauthorized)
+                    set_bearer_challenge(resp, "invalid_token", error_message);
+
+                resp.set_status(status)
                     .set_body(body, "application/json");
                 return;
             }
@@ -175,6 +187,7 @@ static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
 
 AppServer::AppServer(Application& app)
     : pool_(app.db_pool())
+    , log_(app.logger())
     , providers_(app.providers())
     , enabled_(true)
 {
@@ -337,10 +350,30 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
                 verify_jwt(auth.token, providers_);
                 return 1;
             } catch (const JwtExpiredError&) {
-                reply_error(resp, HttpStatus::forbidden, "Token expired.");
+                // 401, not 403. RFC 6750 §3.1 counts "expired" among the reasons
+                // for invalid_token and asks for 401; 403 tells a client the token
+                // was understood and the answer is still no, so it stops instead of
+                // obtaining a new one. The cookie branch below has always answered
+                // 401 to the same condition.
+                reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
+                                   "The access token has expired.");
                 return -1;
             } catch (const JwtVerificationError& e) {
-                reply_error(resp, HttpStatus::unauthorized, e.what());
+                log_.warn("[AppServer] token verification failed: {}", e.what());
+                reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
+                                   "The access token could not be verified.");
+                return -1;
+            } catch (const std::exception& e) {
+                // A token that is not a token at all. verify_jwt starts with
+                // jwt::decode, outside its own try, so a value with the wrong number
+                // of segments or broken base64 throws jwt-cpp's exception rather
+                // than one of ours — and with nothing to catch it, it left this
+                // handler, the connection was dropped, and the caller saw 502 from
+                // the proxy. A malformed bearer token is the commonest of the three
+                // cases in RFC 6750 §3.1 and the only one any stranger can produce.
+                log_.warn("[AppServer] token rejected: {}", e.what());
+                reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
+                                   "The access token is malformed.");
                 return -1;
             }
         }
@@ -385,10 +418,20 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
         } catch (const JwtExpiredError&) {
             if (!refresh_token.empty())
                 return 2;
-            reply_error(resp, HttpStatus::unauthorized, "Token expired.");
+            reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
+                               "The access token has expired.");
             return -1;
         } catch (const JwtVerificationError& e) {
-            reply_error(resp, HttpStatus::unauthorized, e.what());
+            log_.warn("[AppServer] cookie token verification failed: {}", e.what());
+            reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
+                               "The access token could not be verified.");
+            return -1;
+        } catch (const std::exception& e) {
+            // Same as the header branch: a cookie holding something that is not a
+            // JWT threw past both handlers and dropped the connection.
+            log_.warn("[AppServer] cookie token rejected: {}", e.what());
+            reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
+                               "The access token is malformed.");
             return -1;
         }
     }
@@ -541,7 +584,13 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                 std::string error_message;
                 int error_code = check_pg_error(refresh_body, error_message);
                 if (error_code != 0) {
-                    r.set_status(error_code_to_status(error_code))
+                    const auto status = error_code_to_status(error_code);
+
+                    // Same as above: a refused refresh is a 401 like any other.
+                    if (status == HttpStatus::unauthorized)
+                        set_bearer_challenge(r, "invalid_token", error_message);
+
+                    r.set_status(status)
                      .set_body(refresh_body, "application/json");
                     conn->send_response(r);
                     return;

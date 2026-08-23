@@ -115,6 +115,7 @@ private:
     // ── State ───────────────────────────────────────────────────────────────
 
     PgPool&                   pool_;
+    Logger&                   log_;
     const OAuthProviders&     providers_;
     std::vector<std::string>  endpoints_;
     bool                      enabled_;
