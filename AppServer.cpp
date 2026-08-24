@@ -23,7 +23,11 @@ static constexpr const char* kCookieAT  = "__Secure-AT";
 static constexpr const char* kCookieRT  = "__Secure-RT";
 static constexpr const char* kCookieSAT = "__Secure-SAT";
 static constexpr const char* kCookieSRT = "__Secure-SRT";
-static constexpr const char* kCookieSID = "SID";
+// See module-AuthServer for why the prefix is load-bearing: the value is the session
+// code, trusted without a signature, and __Host- is what stops a sibling subdomain
+// from planting one. Both modules must agree on the name — AuthServer mints the
+// cookie, this one refreshes and clears it.
+static constexpr const char* kCookieSID = "__Host-SID";
 static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
 
 // ─── Response shaping parameters ───────────────────────────────────────────
@@ -163,7 +167,19 @@ static void clear_secure(HttpResponse& resp)
     resp.set_cookie(kCookieRT,  "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieSAT, "", "/", -1, true, "None", true);
     resp.set_cookie(kCookieSRT, "", "/", -1, true, "None", true);
-    resp.set_cookie(kCookieSID, "", "/", -1);
+    // Attributes spelled out, not left to the defaults: a __Host- cookie is only
+    // erased by a Set-Cookie carrying Secure and Path=/, and until this was written
+    // the four-argument call cleared a differently-attributed cookie — that is, none.
+    resp.set_cookie(kCookieSID, "", "/", -1, true, "Lax", true);
+
+    // Transitional: the bare "SID" this cookie replaced. Nothing reads it any more,
+    // so there is nothing to exploit — but a browser that signed in before the rename
+    // would otherwise keep a live session code for the full 60 days after its owner
+    // pressed "sign out", ready for any path that ever reads the bare name again.
+    // Deletion matches on name and path only, so one line clears it whether it was
+    // set with Secure (AuthServer) or without (this module, before the fix).
+    // Remove after 2027-03: by then no cookie set under the old name is still alive.
+    resp.set_cookie("SID", "", "/", -1);
 }
 
 /// PgResultHandler that processes result and sends response.
@@ -647,8 +663,13 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                         if (!new_refresh.empty())
                             r2.set_cookie(rt_name, new_refresh, "/",
                                          kCookieMaxAge, true, "None", true);
+                        // Same attributes AuthServer minted it with. On the defaults
+                        // this call replaced a Secure cookie with one without it on
+                        // every token refresh, quietly undoing the barrier a login had
+                        // put up; under __Host- the browser would now reject it instead.
                         if (!session_id.empty() && !is_service)
-                            r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge);
+                            r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge,
+                                          true, "Lax", true);
 
                         process_result(r2, results2, shaping);
                         conn->send_response(r2);
