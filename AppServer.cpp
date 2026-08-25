@@ -476,10 +476,19 @@ void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
         method_q, path_q, payload_q, agent_q, host_q);
 
     auto req_path = req.path;
+    // quiet: the payload IS the credential here. /sign/in, /sign/up and
+    // /authenticate all arrive through daemon.unauthorized_fetch, and their
+    // body carries the user's password in clear text — see rest.sql's /sign/in
+    // branch and daemon.unauthorized_fetch, which special-cases those paths.
+    // The argument names say nothing about it, which is exactly why this one
+    // was missed once. AddApiLog strips `password` before writing db.api_log,
+    // so recording it in postgres.log would contradict the platform's own
+    // intent — and these are end users' passwords, not a service secret.
     exec_sql(pool_, req, resp, std::move(sql),
         [req_path, shaping](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
             on_fetch_result(std::move(conn), std::move(results), shaping, req_path);
-        });
+        },
+        /*quiet=*/true);
 }
 
 // ─── authorized_fetch ───────────────────────────────────────────────────────
@@ -558,6 +567,11 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
     auto pool_ptr = &pool_;
 
+    // quiet: the statement carries BOTH the access token and the refresh token.
+    // The refresh token is the longest-lived credential in the system — new
+    // access tokens are minted from it and revoking it goes a separate way —
+    // and this runs on every token refresh. The neighbours on both sides are
+    // already quiet; this one looked like a plumbing step rather than a query.
     exec_sql(pool_, req, resp, std::move(refresh_sql),
         [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname, is_service, shaping]
         (std::shared_ptr<HttpConnection> conn,
@@ -688,7 +702,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                                         e.what()));
                 conn->send_response(r);
             }
-        });
+        },
+        /*quiet=*/true);
 }
 
 } // namespace apostol
