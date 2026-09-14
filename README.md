@@ -179,6 +179,8 @@ void execute(const HttpRequest& req, std::shared_ptr<HttpConnection> conn,
 
 It is called from every branch once authorisation is settled; on the refresh branch from inside the `daemon.refresh_token` callback, with `req` a copy that outlives the handler and `ctx.auth.token` the new access token. The response is deferred by then: answer through `conn`, and put `apply_refresh_cookies(resp, ctx)` on whatever you send. `ctx.auth_type == AuthType::none` is the unauthorised path.
 
+A module answering in another shape (`problem+json`, say) also overrides `reply_refused(HttpResponse&, const Refusal&)`: every refusal this module produces itself — the six in `check_auth()` and the six in the refresh callback, which a derived class could not intercept otherwise — goes through it. `Refusal::kind` says what happened (`invalid`, `expired`, `refresh_failed`, `database`, `internal`), `status` and `message` say it in HTTP and in words; `body` carries the database's own payload for `Kind::database`, `path` the request's path (RFC 9457 `instance`). The base implementation keeps the v1 bodies and the `WWW-Authenticate` challenge exactly.
+
 Installation
 -
 

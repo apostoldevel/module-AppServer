@@ -179,6 +179,8 @@ void execute(const HttpRequest& req, std::shared_ptr<HttpConnection> conn,
 
 Вызывается из каждой ветки после того, как авторизация решена; в ветке обновления маркера — из обратного вызова `daemon.refresh_token`, где `req` — копия, переживающая обработчик, а `ctx.auth.token` — новый маркер доступа. Ответ к этому моменту отложен: отвечайте через `conn` и ставьте `apply_refresh_cookies(resp, ctx)` на то, что отправляете. `ctx.auth_type == AuthType::none` — путь без учётных данных.
 
+Модуль, отвечающий в другой форме (скажем, `problem+json`), переопределяет ещё и `reply_refused(HttpResponse&, const Refusal&)`: через него проходит каждый отказ, который модуль формирует сам, — шесть в `check_auth()` и шесть в обратном вызове обновления маркера, которые наследник иначе перехватить не может. `Refusal::kind` говорит, что случилось (`invalid`, `expired`, `refresh_failed`, `database`, `internal`), `status` и `message` — то же на языке HTTP и словами; `body` несёт собственный ответ базы для `Kind::database`, `path` — путь запроса (`instance` по RFC 9457). Базовая реализация сохраняет тела v1 и заголовок `WWW-Authenticate` в точности.
+
 Установка
 -
 

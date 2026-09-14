@@ -125,6 +125,36 @@ protected:
                          const ExecContext& ctx, std::string_view method,
                          const std::string& payload, const ResultShaping& shaping);
 
+    // ── How a refusal is worded ─────────────────────────────────────────────
+    //
+    // Every refusal this class produces itself goes through reply_refused():
+    // synchronously from check_auth (the handler's response) and asynchronously
+    // from the token-refresh callback (a fresh response sent through the
+    // connection, where a derived module could not intercept it otherwise).
+    // A module answering another API shape overrides it — problem+json, say —
+    // from status and message; the base keeps the v1 bodies exactly.
+    struct Refusal
+    {
+        enum class Kind
+        {
+            invalid,         // the token could not be verified: signature, audience, issuer, not a token
+            expired,         // the token has expired and no refresh is possible here
+            refresh_failed,  // daemon.refresh_token gave nothing usable
+            database,        // the database refused and its payload (body) says why
+            internal,        // this side broke: a failed statement, an unparsable answer
+        };
+        Kind             kind;
+        HttpStatus       status;
+        std::string_view error;    // OAuth error code when the refusal is a bearer one
+                                   // ("invalid_token") — the base adds the challenge; empty otherwise
+        std::string_view message;  // the reason in words
+        std::string_view body;     // the database's own answer, verbatim, when the refusal
+                                   // is its (an ERR-… payload); empty otherwise
+        std::string_view path;     // the request's path — RFC 9457 "instance" for an override
+    };
+
+    virtual void reply_refused(HttpResponse& resp, const Refusal& refusal);
+
     /// Set-Cookie for the tokens of a refresh (no-op unless ctx.refreshed):
     /// access and refresh token under the user or service names, and the
     /// session id for a user context. Static on purpose: a result callback

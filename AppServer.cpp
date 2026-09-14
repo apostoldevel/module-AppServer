@@ -362,13 +362,13 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
                 // was understood and the answer is still no, so it stops instead of
                 // obtaining a new one. The cookie branch below has always answered
                 // 401 to the same condition.
-                reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
-                                   "The access token has expired.");
+                reply_refused(resp, {Refusal::Kind::expired, HttpStatus::unauthorized, "invalid_token",
+                                     "The access token has expired.", {}, req.path});
                 return -1;
             } catch (const JwtVerificationError& e) {
                 log_.warn("[AppServer] token verification failed: {}", e.what());
-                reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
-                                   "The access token could not be verified.");
+                reply_refused(resp, {Refusal::Kind::invalid, HttpStatus::unauthorized, "invalid_token",
+                                     "The access token could not be verified.", {}, req.path});
                 return -1;
             } catch (const std::exception& e) {
                 // A token that is not a token at all. verify_jwt starts with
@@ -379,8 +379,8 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
                 // the proxy. A malformed bearer token is the commonest of the three
                 // cases in RFC 6750 §3.1 and the only one any stranger can produce.
                 log_.warn("[AppServer] token rejected: {}", e.what());
-                reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
-                                   "The access token is malformed.");
+                reply_refused(resp, {Refusal::Kind::invalid, HttpStatus::unauthorized, "invalid_token",
+                                     "The access token is malformed.", {}, req.path});
                 return -1;
             }
         }
@@ -425,20 +425,20 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
         } catch (const JwtExpiredError&) {
             if (!refresh_token.empty())
                 return 2;
-            reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
-                               "The access token has expired.");
+            reply_refused(resp, {Refusal::Kind::expired, HttpStatus::unauthorized, "invalid_token",
+                                     "The access token has expired.", {}, req.path});
             return -1;
         } catch (const JwtVerificationError& e) {
             log_.warn("[AppServer] cookie token verification failed: {}", e.what());
-            reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
-                               "The access token could not be verified.");
+            reply_refused(resp, {Refusal::Kind::invalid, HttpStatus::unauthorized, "invalid_token",
+                                     "The access token could not be verified.", {}, req.path});
             return -1;
         } catch (const std::exception& e) {
             // Same as the header branch: a cookie holding something that is not a
             // JWT threw past both handlers and dropped the connection.
             log_.warn("[AppServer] cookie token rejected: {}", e.what());
-            reply_bearer_error(resp, HttpStatus::unauthorized, "invalid_token",
-                               "The access token is malformed.");
+            reply_refused(resp, {Refusal::Kind::invalid, HttpStatus::unauthorized, "invalid_token",
+                                     "The access token is malformed.", {}, req.path});
             return -1;
         }
     }
@@ -471,6 +471,27 @@ void AppServer::apply_refresh_cookies(HttpResponse& resp, const ExecContext& ctx
     if (!ctx.session_id.empty() && !ctx.is_service)
         resp.set_cookie(kCookieSID, ctx.session_id, "/", kCookieMaxAge,
                         true, "Lax", true);
+}
+
+// ─── reply_refused ──────────────────────────────────────────────────────────
+
+void AppServer::reply_refused(HttpResponse& resp, const Refusal& refusal)
+{
+    if (!refusal.body.empty()) {
+        // The database refused: its payload is the answer, as it stands. The
+        // challenge goes with a 401 whatever the caller used to authenticate
+        // (RFC 7235 §4.1 is about what the server accepts).
+        if (refusal.status == HttpStatus::unauthorized && !refusal.error.empty())
+            set_bearer_challenge(resp, refusal.error, refusal.message);
+        resp.set_status(refusal.status)
+            .set_body(std::string(refusal.body), "application/json");
+        return;
+    }
+    if (!refusal.error.empty()) {
+        reply_bearer_error(resp, refusal.status, refusal.error, refusal.message);
+        return;
+    }
+    reply_error(resp, refusal.status, refusal.message);
 }
 
 // ─── execute ────────────────────────────────────────────────────────────────
@@ -524,8 +545,8 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
     // on every API request, so it would be a continuous credential leak into
     // that file. AddApiLog strips `password` before writing db.api_log; recording
     // it here would contradict the platform's own intent.
-    // No `this` in the capture: the module may be torn down (reload) while a
-    // query is still queued, and nothing below needs it.
+    // No `this` in the capture: nothing below needs the module, and a result
+    // callback should not have to know how long the module lives.
     pool_.execute(std::move(sql),
         [conn, req_path, shaping, ctx](std::vector<PgResult> results) {
             HttpResponse r;
@@ -596,22 +617,23 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                     ? "no result"
                     : (results[0].error_message()
                         ? results[0].error_message() : "unknown error");
-                reply_error(r, HttpStatus::internal_server_error, err);
+                reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {}, err, {}, req_copy.path});
                 conn->send_response(r);
                 return;
             }
 
             const auto& res = results[0];
             if (res.rows() == 0 || res.columns() == 0) {
-                reply_error(r, HttpStatus::unauthorized, "Token refresh failed.");
+                reply_refused(r, {Refusal::Kind::refresh_failed, HttpStatus::unauthorized, {},
+                              "Token refresh failed.", {}, req_copy.path});
                 conn->send_response(r);
                 return;
             }
 
             const char* val = res.value(0, 0);
             if (!val) {
-                reply_error(r, HttpStatus::unauthorized,
-                            "Token refresh returned null.");
+                reply_refused(r, {Refusal::Kind::refresh_failed, HttpStatus::unauthorized, {},
+                              "Token refresh returned null.", {}, req_copy.path});
                 conn->send_response(r);
                 return;
             }
@@ -628,11 +650,9 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                     const auto status = error_code_to_status(error_code);
 
                     // Same as above: a refused refresh is a 401 like any other.
-                    if (status == HttpStatus::unauthorized)
-                        set_bearer_challenge(r, "invalid_token", error_message);
-
-                    r.set_status(status)
-                     .set_body(refresh_body, "application/json");
+                    reply_refused(r, {Refusal::Kind::database, status,
+                                      status == HttpStatus::unauthorized ? "invalid_token" : "",
+                                      error_message, refresh_body, req_copy.path});
                     conn->send_response(r);
                     return;
                 }
@@ -643,8 +663,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                     new_token = refresh_result["access_token"].get<std::string>();
 
                 if (new_token.empty()) {
-                    reply_error(r, HttpStatus::unauthorized,
-                                "No access_token in refresh response.");
+                    reply_refused(r, {Refusal::Kind::refresh_failed, HttpStatus::unauthorized, {},
+                              "No access_token in refresh response.", {}, req_copy.path});
                     conn->send_response(r);
                     return;
                 }
@@ -662,9 +682,8 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                 execute(req_copy, conn, ctx, method_str, payload_str, shaping);
 
             } catch (const nlohmann::json::exception& e) {
-                reply_error(r, HttpStatus::internal_server_error,
-                            fmt::format("Failed to parse refresh response: {}",
-                                        e.what()));
+                const auto msg = fmt::format("Failed to parse refresh response: {}", e.what());
+                reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {}, msg, {}, req_copy.path});
                 conn->send_response(r);
             }
         },
