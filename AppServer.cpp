@@ -182,29 +182,12 @@ static void clear_secure(HttpResponse& resp)
     resp.set_cookie("SID", "", "/", -1);
 }
 
-/// PgResultHandler that processes result and sends response.
-static void on_fetch_result(std::shared_ptr<HttpConnection> conn,
-                            std::vector<PgResult> results,
-                            const ResultShaping& shaping = {},
-                            const std::string& path = {})
-{
-    HttpResponse r;
-    r.set_header("Content-Type", "application/json");
-    process_result(r, results, shaping);
-
-    // Clear auth cookies on sign-out
-    if (!path.empty() && path.find("/sign/out") != std::string::npos)
-        clear_secure(r);
-
-    conn->send_response(r);
-}
-
 // ─── Construction ───────────────────────────────────────────────────────────
 
 AppServer::AppServer(Application& app)
-    : pool_(app.db_pool())
-    , log_(app.logger())
+    : log_(app.logger())
     , providers_(app.providers())
+    , pool_(app.db_pool())
     , enabled_(true)
 {
     if (auto* cfg = app.module_config("AppServer")) {
@@ -332,11 +315,19 @@ void AppServer::do_fetch(const HttpRequest& req, HttpResponse& resp,
 
     switch (result) {
         case 0:
-            unauthorized_fetch(req, resp, method, payload, shaping);
+        case 1: {
+            // Authorisation settled (none, or as check_auth found it): the
+            // step is the same, the context tells them apart.
+            ExecContext ctx;
+            ctx.auth       = std::move(auth);
+            ctx.auth_type  = auth_type;
+            ctx.is_service = is_service;
+
+            resp.set_deferred(true);
+            auto conn = std::static_pointer_cast<HttpConnection>(req.connection_ctx);
+            execute(req, std::move(conn), ctx, method, payload, shaping);
             break;
-        case 1:
-            authorized_fetch(req, resp, auth, auth_type, method, payload, shaping);
-            break;
+        }
         case 2:
             token_refresh_and_fetch(req, resp, auth, refresh_token,
                                     method, payload, is_service, shaping);
@@ -457,47 +448,36 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
     return 0;
 }
 
-// ─── unauthorized_fetch ─────────────────────────────────────────────────────
+// ─── apply_refresh_cookies ──────────────────────────────────────────────────
 
-void AppServer::unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
-                                    std::string_view method,
-                                    const std::string& payload,
-                                    const ResultShaping& shaping)
+void AppServer::apply_refresh_cookies(HttpResponse& resp, const ExecContext& ctx)
 {
-    auto method_q  = pq_quote_literal(method);
-    auto path_q    = pq_quote_literal(req.path);
-    auto payload_q = payload.empty() ? std::string("null")
-                                     : pq_quote_literal(payload);
-    auto agent_q   = pq_quote_literal(get_user_agent(req));
-    auto host_q    = pq_quote_literal(get_real_ip(req));
+    if (!ctx.refreshed)
+        return;
 
-    auto sql = fmt::format(
-        "SELECT * FROM daemon.unauthorized_fetch({}, {}, {}::jsonb, {}, {})",
-        method_q, path_q, payload_q, agent_q, host_q);
+    auto at_name = ctx.is_service ? kCookieSAT : kCookieAT;
+    auto rt_name = ctx.is_service ? kCookieSRT : kCookieRT;
 
-    auto req_path = req.path;
-    // quiet: the payload IS the credential here. /sign/in, /sign/up and
-    // /authenticate all arrive through daemon.unauthorized_fetch, and their
-    // body carries the user's password in clear text — see rest.sql's /sign/in
-    // branch and daemon.unauthorized_fetch, which special-cases those paths.
-    // The argument names say nothing about it, which is exactly why this one
-    // was missed once. AddApiLog strips `password` before writing db.api_log,
-    // so recording it in postgres.log would contradict the platform's own
-    // intent — and these are end users' passwords, not a service secret.
-    exec_sql(pool_, req, resp, std::move(sql),
-        [req_path, shaping](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
-            on_fetch_result(std::move(conn), std::move(results), shaping, req_path);
-        },
-        /*quiet=*/true);
+    if (!ctx.auth.token.empty())
+        resp.set_cookie(at_name, ctx.auth.token, "/",
+                        kCookieMaxAge, true, "None", true);
+    if (!ctx.new_refresh.empty())
+        resp.set_cookie(rt_name, ctx.new_refresh, "/",
+                        kCookieMaxAge, true, "None", true);
+    // Same attributes AuthServer minted it with. On the defaults this call
+    // replaced a Secure cookie with one without it on every token refresh,
+    // quietly undoing the barrier a login had put up; under __Host- the
+    // browser would now reject it instead.
+    if (!ctx.session_id.empty() && !ctx.is_service)
+        resp.set_cookie(kCookieSID, ctx.session_id, "/", kCookieMaxAge,
+                        true, "Lax", true);
 }
 
-// ─── authorized_fetch ───────────────────────────────────────────────────────
+// ─── execute ────────────────────────────────────────────────────────────────
 
-void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
-                                  const Authorization& auth, AuthType auth_type,
-                                  std::string_view method,
-                                  const std::string& payload,
-                                  const ResultShaping& shaping)
+void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> conn,
+                        const ExecContext& ctx, std::string_view method,
+                        const std::string& payload, const ResultShaping& shaping)
 {
     auto method_q  = pq_quote_literal(method);
     auto path_q    = pq_quote_literal(req.path);
@@ -508,35 +488,62 @@ void AppServer::authorized_fetch(const HttpRequest& req, HttpResponse& resp,
 
     std::string sql;
 
-    if (auth.schema == Authorization::Schema::bearer) {
+    if (ctx.auth_type == AuthType::none) {
+        // daemon.unauthorized_fetch(method, path, payload, agent, host)
+        sql = fmt::format(
+            "SELECT * FROM daemon.unauthorized_fetch({}, {}, {}::jsonb, {}, {})",
+            method_q, path_q, payload_q, agent_q, host_q);
+    } else if (ctx.auth.schema == Authorization::Schema::bearer) {
         // daemon.fetch(token, method, path, payload, agent, host)
         sql = fmt::format(
             "SELECT * FROM daemon.fetch({}, {}, {}, {}::jsonb, {}, {})",
-            pq_quote_literal(auth.token), method_q, path_q,
+            pq_quote_literal(ctx.auth.token), method_q, path_q,
             payload_q, agent_q, host_q);
-    } else if (auth_type == AuthType::session) {
+    } else if (ctx.auth_type == AuthType::session) {
         // daemon.session_fetch(session, secret, method, path, payload, agent, host)
         sql = fmt::format(
             "SELECT * FROM daemon.session_fetch({}, {}, {}, {}, {}::jsonb, {}, {})",
-            pq_quote_literal(auth.username), pq_quote_literal(auth.password),
+            pq_quote_literal(ctx.auth.username), pq_quote_literal(ctx.auth.password),
             method_q, path_q, payload_q, agent_q, host_q);
     } else {
         // daemon.authorized_fetch(username, password, method, path, payload, agent, host)
         sql = fmt::format(
             "SELECT * FROM daemon.authorized_fetch({}, {}, {}, {}, {}::jsonb, {}, {})",
-            pq_quote_literal(auth.username), pq_quote_literal(auth.password),
+            pq_quote_literal(ctx.auth.username), pq_quote_literal(ctx.auth.password),
             method_q, path_q, payload_q, agent_q, host_q);
     }
 
     auto req_path = req.path;
 
     // quiet: depending on the branch above the statement carries an access token,
-    // a session code with its secret, or a username and password. PgPool logs
-    // statement text, and a dedicated postgres.log keeps it at debug — this runs on
-    // every API request, so it would be a continuous credential leak into that file.
-    exec_sql(pool_, req, resp, std::move(sql),
-        [req_path, shaping](std::shared_ptr<HttpConnection> conn, std::vector<PgResult> results) {
-            on_fetch_result(std::move(conn), std::move(results), shaping, req_path);
+    // a session code with its secret, or a username and password — or, on the
+    // unauthorised path, the payload IS the credential: /sign/in, /sign/up and
+    // /authenticate all arrive through daemon.unauthorized_fetch with the user's
+    // password in clear text (see rest.sql's /sign/in branch). PgPool logs
+    // statement text, and a dedicated postgres.log keeps it at debug — this runs
+    // on every API request, so it would be a continuous credential leak into
+    // that file. AddApiLog strips `password` before writing db.api_log; recording
+    // it here would contradict the platform's own intent.
+    // No `this` in the capture: the module may be torn down (reload) while a
+    // query is still queued, and nothing below needs it.
+    pool_.execute(std::move(sql),
+        [conn, req_path, shaping, ctx](std::vector<PgResult> results) {
+            HttpResponse r;
+            r.set_header("Content-Type", "application/json");
+            process_result(r, results, shaping);
+
+            // Clear auth cookies on sign-out. Not after a refresh — that branch
+            // never did, and the refreshed pair is set below as before.
+            if (!ctx.refreshed && req_path.find("/sign/out") != std::string::npos)
+                clear_secure(r);
+
+            apply_refresh_cookies(r, ctx);
+            conn->send_response(r);
+        },
+        [conn](std::string_view error) {
+            HttpResponse r;
+            reply_error(r, HttpStatus::internal_server_error, error);
+            conn->send_response(r);
         },
         /*quiet=*/true);
 }
@@ -557,15 +564,19 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
         pq_quote_literal(auth.token),
         pq_quote_literal(refresh_token));
 
-    // Capture values needed for the chained second query
+    // The request itself is a local of HttpConnection::on_readable and is gone
+    // once this handler returns; the chained execute() wants the whole of it
+    // (an override forwards headers and body). A copy, on this branch only —
+    // it is the rare one — with connection_ctx carried along.
+    auto req_copy    = req;
     auto method_str  = std::string(method);
     auto payload_str = payload;
-    auto path_str    = req.path;
-    auto agent_str   = get_user_agent(req);
-    auto host_str    = get_real_ip(req);
-    auto hostname    = get_host(req);
 
-    auto pool_ptr = &pool_;
+    ExecContext ctx;
+    ctx.auth       = auth;          // token replaced by the refreshed one below
+    ctx.auth_type  = AuthType::bearer;
+    ctx.is_service = is_service;
+    ctx.refreshed  = true;
 
     // quiet: the statement carries BOTH the access token and the refresh token.
     // The refresh token is the longest-lived credential in the system — new
@@ -573,9 +584,9 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
     // and this runs on every token refresh. The neighbours on both sides are
     // already quiet; this one looked like a plumbing step rather than a query.
     exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [pool_ptr, method_str, payload_str, path_str, agent_str, host_str, hostname, is_service, shaping]
+        [this, req_copy = std::move(req_copy), method_str, payload_str, ctx, shaping]
         (std::shared_ptr<HttpConnection> conn,
-         std::vector<PgResult> results) {
+         std::vector<PgResult> results) mutable {
 
             HttpResponse r;
             r.set_header("Content-Type", "application/json");
@@ -639,62 +650,16 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                 }
 
                 // Extract optional refresh token and session
-                std::string new_refresh;
-                std::string session_id;
                 if (refresh_result.contains("refresh_token"))
-                    new_refresh = refresh_result["refresh_token"].get<std::string>();
+                    ctx.new_refresh = refresh_result["refresh_token"].get<std::string>();
                 if (refresh_result.contains("session"))
-                    session_id = refresh_result["session"].get<std::string>();
+                    ctx.session_id = refresh_result["session"].get<std::string>();
 
-                // Step 2: execute the actual fetch with the refreshed token
-                auto method_q  = pq_quote_literal(method_str);
-                auto path_q    = pq_quote_literal(path_str);
-                auto payload_q = payload_str.empty() ? std::string("null")
-                                                     : pq_quote_literal(payload_str);
-                auto agent_q   = pq_quote_literal(agent_str);
-                auto host_q    = pq_quote_literal(host_str);
-                auto token_q   = pq_quote_literal(new_token);
-
-                auto fetch_sql = fmt::format(
-                    "SELECT * FROM daemon.fetch({}, {}, {}, {}::jsonb, {}, {})",
-                    token_q, method_q, path_q, payload_q, agent_q, host_q);
-
-                // Chain: second PG query using the refreshed token.
-                // quiet: fetch_sql carries that token.
-                pool_ptr->execute(std::move(fetch_sql),
-                    [conn, new_token, new_refresh, session_id, hostname, is_service, shaping]
-                    (std::vector<PgResult> results2) {
-                        HttpResponse r2;
-                        r2.set_header("Content-Type", "application/json");
-
-                        // Set secure cookies with refreshed tokens
-                        auto at_name = is_service ? kCookieSAT : kCookieAT;
-                        auto rt_name = is_service ? kCookieSRT : kCookieRT;
-
-                        if (!new_token.empty())
-                            r2.set_cookie(at_name, new_token, "/",
-                                         kCookieMaxAge, true, "None", true);
-                        if (!new_refresh.empty())
-                            r2.set_cookie(rt_name, new_refresh, "/",
-                                         kCookieMaxAge, true, "None", true);
-                        // Same attributes AuthServer minted it with. On the defaults
-                        // this call replaced a Secure cookie with one without it on
-                        // every token refresh, quietly undoing the barrier a login had
-                        // put up; under __Host- the browser would now reject it instead.
-                        if (!session_id.empty() && !is_service)
-                            r2.set_cookie(kCookieSID, session_id, "/", kCookieMaxAge,
-                                          true, "Lax", true);
-
-                        process_result(r2, results2, shaping);
-                        conn->send_response(r2);
-                    },
-                    // on_exception for chained fetch
-                    [conn](std::string_view error) {
-                        HttpResponse r2;
-                        reply_error(r2, HttpStatus::internal_server_error, error);
-                        conn->send_response(r2);
-                    },
-                    /*quiet=*/true);
+                // Step 2: the request itself, with the refreshed token in force.
+                // The cookies for the new pair go on the final response —
+                // apply_refresh_cookies, inside execute().
+                ctx.auth.token = std::move(new_token);
+                execute(req_copy, conn, ctx, method_str, payload_str, shaping);
 
             } catch (const nlohmann::json::exception& e) {
                 reply_error(r, HttpStatus::internal_server_error,

@@ -167,6 +167,18 @@ All paths under `/api/` that are not handled by the built-in endpoints above are
 
 The full set of application endpoints is therefore defined entirely in the project's database, in the `daemon` schema PL/pgSQL functions. **See your project's repository for endpoint documentation.**
 
+### Reusing the authorisation with another execution step
+
+The step that runs the request is the virtual `execute()`. A module that needs the same authorisation — Bearer, Session + Secret, cookies with automatic refresh — but executes elsewhere (a gateway forwarding to another process, for instance) derives from `AppServer`, overrides `check_location()` for its own paths, calls `do_fetch()` from its method handlers and overrides `execute()`:
+
+```cpp
+void execute(const HttpRequest& req, std::shared_ptr<HttpConnection> conn,
+             const ExecContext& ctx, std::string_view method,
+             const std::string& payload, const ResultShaping& shaping) override;
+```
+
+It is called from every branch once authorisation is settled; on the refresh branch from inside the `daemon.refresh_token` callback, with `req` a copy that outlives the handler and `ctx.auth.token` the new access token. The response is deferred by then: answer through `conn`, and put `apply_refresh_cookies(resp, ctx)` on whatever you send. `ctx.auth_type == AuthType::none` is the unauthorised path.
+
 Installation
 -
 

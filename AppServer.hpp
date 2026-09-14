@@ -9,6 +9,7 @@
 #include "apostol/pg.hpp"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,7 +31,11 @@ struct ResultShaping;
 //
 // Mirrors v1 CAppServer from src/modules/Workers/AppServer/.
 //
-class AppServer final : public ApostolModule
+// Open for derivation: a module that keeps this authorisation — check_auth,
+// the cookie token refresh — but executes the request elsewhere (a gateway
+// forwarding to another process) overrides execute() and nothing else.
+//
+class AppServer : public ApostolModule
 {
 public:
     explicit AppServer(Application& app);
@@ -59,21 +64,36 @@ public:
 protected:
     void init_methods() override;
 
-private:
-    // ── HTTP method handlers ────────────────────────────────────────────────
-
-    void do_get(const HttpRequest& req, HttpResponse& resp);
-    void do_post(const HttpRequest& req, HttpResponse& resp);
-    void do_put(const HttpRequest& req, HttpResponse& resp);
-    void do_patch(const HttpRequest& req, HttpResponse& resp);
-    void do_delete(const HttpRequest& req, HttpResponse& resp);
-
     // ── Auth type ───────────────────────────────────────────────────────────
 
     enum class AuthType { none, bearer, session, basic_auth };
 
-    // ── Main dispatch ───────────────────────────────────────────────────────
+    // ── What execute() receives once authorisation is settled ──────────────
 
+    struct ExecContext
+    {
+        // What the call is authorised with. auth.token is the access token in
+        // force — after a refresh, the NEW one. On the unauthorised path the
+        // schema is none and the token empty. The whole Authorization, not
+        // just the token: session_fetch/authorized_fetch need username and
+        // password.
+        Authorization auth;
+        AuthType      auth_type{AuthType::none};
+        bool          is_service{false};   // X-Auth-Context: service
+
+        // Set only after daemon.refresh_token succeeded: what the final
+        // response must carry as cookies (apply_refresh_cookies). The new
+        // access token is auth.token.
+        bool          refreshed{false};
+        std::string   new_refresh;
+        std::string   session_id;
+    };
+
+    // ── Main dispatch ───────────────────────────────────────────────────────
+    //
+    // Validates shaping parameters, builds the payload, decides authorisation
+    // (check_auth) and hands the request to execute(). A derived module with
+    // its own method handlers calls this from them.
     void do_fetch(const HttpRequest& req, HttpResponse& resp,
                   std::string_view method);
 
@@ -87,18 +107,43 @@ private:
                    Authorization& auth, AuthType& auth_type,
                    std::string& refresh_token, bool& is_service);
 
-    // ── Fetch variants → build SQL → exec_sql() ────────────────────────────
+    // ── The virtual step: execute the request ───────────────────────────────
+    //
+    // Called from every branch of do_fetch once authorisation is settled — on
+    // the refresh branch from inside the daemon.refresh_token callback, with
+    // @p req a copy that outlives the handler (connection_ctx preserved). On
+    // every other branch @p req is HttpConnection::on_readable's local and dies
+    // when the handler returns: copy what an async step needs before taking
+    // it. The response is deferred by then: the implementation answers through
+    // @p conn, and must put apply_refresh_cookies() on whatever it sends.
+    //
+    // The base implementation is the daemon.*fetch call — daemon.unauthorized_fetch,
+    // daemon.fetch, daemon.session_fetch or daemon.authorized_fetch by the context —
+    // with the result shaped by process_result. @p shaping is opaque to an
+    // override; pass it on or ignore it.
+    virtual void execute(const HttpRequest& req, std::shared_ptr<HttpConnection> conn,
+                         const ExecContext& ctx, std::string_view method,
+                         const std::string& payload, const ResultShaping& shaping);
 
-    void unauthorized_fetch(const HttpRequest& req, HttpResponse& resp,
-                            std::string_view method,
-                            const std::string& payload,
-                            const ResultShaping& shaping);
+    /// Set-Cookie for the tokens of a refresh (no-op unless ctx.refreshed):
+    /// access and refresh token under the user or service names, and the
+    /// session id for a user context. Static on purpose: a result callback
+    /// calls it after the module may be gone, and it needs nothing from it.
+    static void apply_refresh_cookies(HttpResponse& resp, const ExecContext& ctx);
 
-    void authorized_fetch(const HttpRequest& req, HttpResponse& resp,
-                          const Authorization& auth, AuthType auth_type,
-                          std::string_view method,
-                          const std::string& payload,
-                          const ResultShaping& shaping);
+    Logger&                   log_;
+    const OAuthProviders&     providers_;
+
+private:
+    // ── HTTP method handlers ────────────────────────────────────────────────
+
+    void do_get(const HttpRequest& req, HttpResponse& resp);
+    void do_post(const HttpRequest& req, HttpResponse& resp);
+    void do_put(const HttpRequest& req, HttpResponse& resp);
+    void do_patch(const HttpRequest& req, HttpResponse& resp);
+    void do_delete(const HttpRequest& req, HttpResponse& resp);
+
+    // ── Token refresh → execute() ───────────────────────────────────────────
 
     void token_refresh_and_fetch(const HttpRequest& req, HttpResponse& resp,
                                  const Authorization& auth,
@@ -115,8 +160,6 @@ private:
     // ── State ───────────────────────────────────────────────────────────────
 
     PgPool&                   pool_;
-    Logger&                   log_;
-    const OAuthProviders&     providers_;
     std::vector<std::string>  endpoints_;
     bool                      enabled_;
     PayloadTransformer        payload_transformer_;
