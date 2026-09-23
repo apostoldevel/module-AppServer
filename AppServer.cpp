@@ -647,9 +647,26 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                 std::string error_message;
                 int error_code = check_pg_error(refresh_body, error_message);
                 if (error_code != 0) {
-                    const auto status = error_code_to_status(error_code);
+                    auto status = error_code_to_status(error_code);
 
-                    // Same as above: a refused refresh is a 401 like any other.
+                    // A refresh the database refuses (4xx) leaves the caller with a
+                    // dead pair, whatever code it said: "Malformed refresh token." is
+                    // 400 invalid_grant, a spent or closed refresh. It used to go out
+                    // as that 400; a client re-authenticates on 401 only, so it kept
+                    // polling with the same cookies and got the same 400 on every
+                    // request until it signed in again by hand. 401 invalid_token
+                    // (RFC 6750 §3.1). A 5xx is this side failing, not a refusal:
+                    // it passes through.
+                    //
+                    // The cookies are NOT erased here, on purpose. This request may be
+                    // the late one of a pair: its neighbour has already rotated the
+                    // refresh and the browser holds the live pair from that answer. A
+                    // Max-Age=0 on this answer would delete it and sign out a working
+                    // session. A dead pair costs nothing to leave: the next request
+                    // gets the same 401, and a sign-in overwrites it.
+                    if (static_cast<int>(status) < 500)
+                        status = HttpStatus::unauthorized;
+
                     reply_refused(r, {Refusal::Kind::database, status,
                                       status == HttpStatus::unauthorized ? "invalid_token" : "",
                                       error_message, refresh_body, req_copy.path});
