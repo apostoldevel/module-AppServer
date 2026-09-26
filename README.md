@@ -167,6 +167,14 @@ All paths under `/api/` that are not handled by the built-in endpoints above are
 
 The full set of application endpoints is therefore defined entirely in the project's database, in the `daemon` schema PL/pgSQL functions. **See your project's repository for endpoint documentation.**
 
+### Guest routes
+
+`module.AppServer.guest_routes` — a list of full request paths (`/api/v1/…`, no query string; exact match). A request **without credentials** to one of them is executed by `daemon.fetch` under the module's own service token — the `service` client of the `default` provider, its secret from the configuration — instead of `daemon.unauthorized_fetch`. It is for the sign-in screen's registration and recovery calls, which a browser cannot make with a client credential of its own (RFC 6749 §2.1, §4.4). A request with credentials, and a path outside the list, are handled as before. Default: empty.
+
+- The token is minted on the heartbeat; until then (the first second of a worker) a guest route answers `503` with `Retry-After: 1`.
+- Every guest shares **one** service session per worker. If the database closes it (a rate limiter that signs the calling session out, for example), the request answers `503` `Retry-After: 1` and the next heartbeat mints a new one. Limits meant per client have to key on the client's address, not on the session.
+- `daemon.fetch` does not consult the blacklist that `daemon.unauthorized_fetch` does: a route put in this list bypasses it.
+
 ### Reusing the authorisation with another execution step
 
 The step that runs the request is the virtual `execute()`. A module that needs the same authorisation — Bearer, Session + Secret, cookies with automatic refresh — but executes elsewhere (a gateway forwarding to another process, for instance) derives from `AppServer`, overrides `check_location()` for its own paths, calls `do_fetch()` from its method handlers and overrides `execute()`:

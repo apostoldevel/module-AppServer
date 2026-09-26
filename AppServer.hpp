@@ -4,6 +4,7 @@
 
 #include "apostol/http.hpp"
 #include "apostol/apostol_module.hpp"
+#include "apostol/service_token.hpp"
 #include "apostol/jwt.hpp"
 #include "apostol/oauth_providers.hpp"
 #include "apostol/pg.hpp"
@@ -43,7 +44,12 @@ public:
     std::string_view name() const override { return "AppServer"; }
     bool enabled() const override { return enabled_; }
     bool check_location(const HttpRequest& req) const override;
-    void heartbeat(std::chrono::system_clock::time_point) override {}
+    /// Keeps the module's service token for guest routes (T289); a no-op when
+    /// guest_routes is empty, and in a derived module (GatewayAPI).
+    void heartbeat(std::chrono::system_clock::time_point) override;
+
+    /// Closes the service session the guest routes ran under.
+    void on_stop() override;
 
     // ── Payload transform hook ──────────────────────────────────────────────
     //
@@ -192,6 +198,23 @@ private:
     // ── State ───────────────────────────────────────────────────────────────
 
     PgPool&                   pool_;
+
+    /// module.AppServer.guest_routes — full request paths (no query string)
+    /// that a request WITHOUT credentials may call, executed under the
+    /// module's own service token instead of daemon.unauthorized_fetch: the
+    /// sign-in screen's registration and recovery calls, which a browser used
+    /// to make with a service token it minted itself by client_credentials
+    /// (T289). A request with credentials is never touched. Default empty.
+    std::vector<std::string>  guest_routes_;
+    ServiceToken              service_token_;
+    // Set by a guest request's result callback when the database refused the
+    // service session (401 — it was closed, e.g. by a rate limiter that signs
+    // the calling session out); heartbeat() then drops the token and mints a
+    // new one. Shared, not a member flag: the callback does not capture the
+    // module.
+    std::shared_ptr<bool>     guest_session_lost_ = std::make_shared<bool>(false);
+
+    bool is_guest_route(std::string_view path) const;
     std::vector<std::string>  endpoints_;
     bool                      enabled_;
     PayloadTransformer        payload_transformer_;

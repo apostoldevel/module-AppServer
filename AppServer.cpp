@@ -4,6 +4,7 @@
 #include "apostol/application.hpp"
 
 #include "apostol/base64.hpp"
+#include "apostol/db_platform.hpp"
 #include "apostol/http.hpp"
 #include "apostol/http_utils.hpp"
 #include "apostol/pg.hpp"
@@ -210,11 +211,78 @@ AppServer::AppServer(Application& app)
     if (endpoints_.empty())
         endpoints_.push_back("/api/v1/*");
 
+    if (auto* cfg = app.module_config("AppServer")) {
+        if (auto it = cfg->find("guest_routes"); it != cfg->end()) {
+            if (it->is_array()) {
+                for (const auto& r : *it)
+                    if (r.is_string())
+                        guest_routes_.push_back(r.get<std::string>());
+            } else {
+                log_.warn("[AppServer] module.AppServer.guest_routes is not an array — ignored");
+            }
+        }
+    }
+
     add_allowed_header("Authorization");
     add_allowed_header("Session");
     add_allowed_header("Secret");
 
     load_allowed_origins(providers_);
+}
+
+// ─── guest routes (T289) ────────────────────────────────────────────────────
+
+bool AppServer::is_guest_route(std::string_view path) const
+{
+    return std::find(guest_routes_.begin(), guest_routes_.end(), path) != guest_routes_.end();
+}
+
+void AppServer::heartbeat(std::chrono::system_clock::time_point)
+{
+    // GatewayAPI derives from this module and reads the same section; only
+    // AppServer itself serves guest routes, so only it holds a session for them.
+    if (guest_routes_.empty() || name() != "AppServer")
+        return;
+
+    // The database closed the session a guest request ran under. The token
+    // would otherwise be taken for good until it expires — up to a day of
+    // every guest route answering 503. Mint a new one now.
+    if (*guest_session_lost_) {
+        *guest_session_lost_ = false;
+        log_.warn("[AppServer] the guest routes' service session was closed by the "
+                  "database — minting a new one");
+        service_token_.invalidate();
+    }
+
+    const auto* svc = providers_.find_default("service");
+    if (!svc) {
+        if (service_token_.needs_refresh()) {
+            log_.error("[AppServer] no \"service\" client in conf/oauth2: guest routes "
+                       "will answer 503");
+            service_token_.failed();
+        }
+        return;
+    }
+
+    std::string scope;
+    for (const auto& sc : svc->scopes) {
+        if (!scope.empty())
+            scope += ' ';
+        scope += sc;
+    }
+
+    // Cheap when the token is still good; see db_platform::refresh_service_token.
+    db_platform::refresh_service_token(pool_, service_token_, log_, "[AppServer]",
+                                       svc->client_id, svc->client_secret, scope,
+                                       "AppServer/2.0", "127.0.0.1");
+}
+
+void AppServer::on_stop()
+{
+    if (guest_routes_.empty() || name() != "AppServer")
+        return;
+    db_platform::close_session(pool_, service_token_.token(), &log_, "[AppServer]");
+    service_token_.invalidate();
 }
 
 // ─── check_location ─────────────────────────────────────────────────────────
@@ -533,7 +601,24 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
 
     std::string sql;
 
-    if (ctx.auth_type == AuthType::none) {
+    if (ctx.auth_type == AuthType::none && is_guest_route(req.path)) {
+        // A guest route: no credentials, and none needed from the caller —
+        // the module asks on its own behalf, as AuthServer does for
+        // /oauth2/identifier. The browser used to mint that token itself by
+        // client_credentials, which made the service client public (T289).
+        if (!service_token_.valid()) {
+            HttpResponse r;
+            reply_error(r, HttpStatus::service_unavailable,
+                        "The service account is not available.");
+            r.set_header("Retry-After", "1");
+            conn->send_response(r);
+            return;
+        }
+        sql = fmt::format(
+            "SELECT * FROM daemon.fetch({}, {}, {}, {}::jsonb, {}, {})",
+            pq_quote_literal(service_token_.token()), method_q, path_q,
+            payload_q, agent_q, host_q);
+    } else if (ctx.auth_type == AuthType::none) {
         // daemon.unauthorized_fetch(method, path, payload, agent, host)
         sql = fmt::format(
             "SELECT * FROM daemon.unauthorized_fetch({}, {}, {}::jsonb, {}, {})",
@@ -559,6 +644,8 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
     }
 
     auto req_path = req.path;
+    const bool guest = ctx.auth_type == AuthType::none && is_guest_route(req.path);
+    auto guest_session_lost = guest_session_lost_;
 
     // quiet: depending on the branch above the statement carries an access token,
     // a session code with its secret, or a username and password — or, on the
@@ -572,10 +659,23 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
     // No `this` in the capture: nothing below needs the module, and a result
     // callback should not have to know how long the module lives.
     pool_.execute(std::move(sql),
-        [conn, req_path, shaping, ctx](std::vector<PgResult> results) {
+        [conn, req_path, shaping, ctx, guest, guest_session_lost](std::vector<PgResult> results) {
             HttpResponse r;
             r.set_header("Content-Type", "application/json");
             process_result(r, results, shaping, ctx.auth_type == AuthType::none);
+
+            // A guest route answered 401: not the guest's credentials — it
+            // sent none — but the module's service session, which the
+            // database has closed (a rate limiter signs the calling session
+            // out, and here every guest shares one). Say "try again" rather
+            // than "sign in", and have heartbeat() mint a new session.
+            if (guest && r.status_code() == 401) {
+                *guest_session_lost = true;
+                r.clear();
+                reply_error(r, HttpStatus::service_unavailable,
+                            "The service account is not available.");
+                r.set_header("Retry-After", "1");
+            }
 
             // Sign-out wins over the refresh, and this is the whole of the
             // rule: a request that ends the session never leaves credentials
