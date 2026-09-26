@@ -139,7 +139,9 @@ protected:
         {
             invalid,         // the token could not be verified: signature, audience, issuer, not a token
             expired,         // the token has expired and no refresh is possible here
-            refresh_failed,  // daemon.refresh_token gave nothing usable
+            refresh_failed,  // not produced since T307: an unusable refresh answer is
+                             // `internal` (500), this side failing. Kept for
+                             // overrides of reply_refused that name it
             database,        // the database refused and its payload (body) says why
             internal,        // this side broke: a failed statement, an unparsable answer
         };

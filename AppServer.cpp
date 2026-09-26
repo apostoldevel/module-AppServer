@@ -88,7 +88,8 @@ struct ResultShaping
 //
 static void process_result(HttpResponse& resp,
                            const std::vector<PgResult>& results,
-                           const ResultShaping& shaping = {})
+                           const ResultShaping& shaping = {},
+                           bool no_credentials = false)
 {
     if (results.empty() || !results[0].ok()) {
         std::string err = results.empty()
@@ -142,8 +143,18 @@ static void process_result(HttpResponse& resp,
                 // The scheme is advertised whatever the caller used to authenticate;
                 // RFC 7235 §4.1 is about what the server accepts, not about what
                 // this request tried.
-                if (status == HttpStatus::unauthorized)
-                    set_bearer_challenge(resp, "invalid_token", error_message);
+                //
+                // A request that carried no credentials at all gets the bare
+                // challenge (§3.1: no error code) — the database's 401 to it
+                // means "sign in", not "your token is bad". This is the answer
+                // every unauthenticated call to a protected endpoint gets, and
+                // the go-platform host already gives the bare form (T307).
+                if (status == HttpStatus::unauthorized) {
+                    if (no_credentials)
+                        resp.set_header("WWW-Authenticate", "Bearer");
+                    else
+                        set_bearer_challenge(resp, "invalid_token", error_message);
+                }
 
                 resp.set_status(status)
                     .set_body(body, "application/json");
@@ -350,6 +361,19 @@ int AppServer::check_auth(const HttpRequest& req, HttpResponse& resp,
     if (!auth_header.empty()) {
         auth = parse_authorization(auth_header);
 
+        // "Authorization: Bearer " with nothing after it carries no credentials,
+        // and RFC 6750 §3.1 answers a request without credentials with a bare
+        // challenge, not invalid_token — it used to be "The access token is
+        // malformed". Answered as a request without credentials (the Session
+        // headers and cookies are not consulted on this path, as for any
+        // Authorization header) — what the go-platform host does with it too.
+        // Defensive: the parser trims the value, so from the wire it arrives
+        // as "Bearer" and parse_authorization() already makes it no scheme.
+        if (auth.schema == Authorization::Schema::bearer && auth.token.empty()) {
+            auth_type = AuthType::none;
+            return 0;
+        }
+
         if (auth.schema == Authorization::Schema::bearer) {
             auth_type = AuthType::bearer;
 
@@ -551,7 +575,7 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
         [conn, req_path, shaping, ctx](std::vector<PgResult> results) {
             HttpResponse r;
             r.set_header("Content-Type", "application/json");
-            process_result(r, results, shaping);
+            process_result(r, results, shaping, ctx.auth_type == AuthType::none);
 
             // Sign-out wins over the refresh, and this is the whole of the
             // rule: a request that ends the session never leaves credentials
@@ -636,9 +660,13 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                 return;
             }
 
+            // An answer daemon.refresh_token never gives — no row, a null, a JSON
+            // without access_token and without an error — is this side failing,
+            // not the token: 500, not 401. As 401 token-expired / ERR-401-008 it
+            // sent the client to sign in again instead of retrying.
             const auto& res = results[0];
             if (res.rows() == 0 || res.columns() == 0) {
-                reply_refused(r, {Refusal::Kind::refresh_failed, HttpStatus::unauthorized, {},
+                reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {},
                               "Token refresh failed.", {}, req_copy.path});
                 conn->send_response(r);
                 return;
@@ -646,7 +674,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
 
             const char* val = res.value(0, 0);
             if (!val) {
-                reply_refused(r, {Refusal::Kind::refresh_failed, HttpStatus::unauthorized, {},
+                reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {},
                               "Token refresh returned null.", {}, req_copy.path});
                 conn->send_response(r);
                 return;
@@ -694,7 +722,7 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                     new_token = refresh_result["access_token"].get<std::string>();
 
                 if (new_token.empty()) {
-                    reply_refused(r, {Refusal::Kind::refresh_failed, HttpStatus::unauthorized, {},
+                    reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {},
                               "No access_token in refresh response.", {}, req_copy.path});
                     conn->send_response(r);
                     return;
