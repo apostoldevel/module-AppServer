@@ -553,12 +553,26 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
             r.set_header("Content-Type", "application/json");
             process_result(r, results, shaping);
 
-            // Clear auth cookies on sign-out. Not after a refresh — that branch
-            // never did, and the refreshed pair is set below as before.
-            if (!ctx.refreshed && req_path.find("/sign/out") != std::string::npos)
+            // Sign-out wins over the refresh, and this is the whole of the
+            // rule: a request that ends the session never leaves credentials
+            // behind, however it got itself authorised on the way in.
+            //
+            // It used to be the other way round. The clearing was skipped when
+            // the request had refreshed its token, and apply_refresh_cookies()
+            // then minted a fresh pair with a sixty-day Max-Age — on the very
+            // answer that had just closed the session in the database. An
+            // access token lives an hour, so a sign-out pressed later than that
+            // took this branch as a matter of course rather than as an edge
+            // case: on a shared terminal — a ship's bridge console is the case
+            // that found this — "log out" left a full, live-looking cookie set
+            // on the machine. The session behind it was dead, so nobody got in
+            // with it; what failed is the promise the button makes, which is
+            // that the credentials are gone from here.
+            const bool signing_out = req_path.find("/sign/out") != std::string::npos;
+            if (signing_out)
                 clear_secure(r);
-
-            apply_refresh_cookies(r, ctx);
+            else
+                apply_refresh_cookies(r, ctx);
             conn->send_response(r);
         },
         [conn](std::string_view error) {
