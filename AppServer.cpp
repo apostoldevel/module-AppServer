@@ -8,7 +8,6 @@
 #include "apostol/http.hpp"
 #include "apostol/http_utils.hpp"
 #include "apostol/pg.hpp"
-#include "apostol/pg_exec.hpp"
 #include "apostol/pg_utils.hpp"
 
 #include <algorithm>
@@ -742,10 +741,20 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
     // access tokens are minted from it and revoking it goes a separate way —
     // and this runs on every token refresh. The neighbours on both sides are
     // already quiet; this one looked like a plumbing step rather than a query.
-    exec_sql(pool_, req, resp, std::move(refresh_sql),
-        [this, req_copy = std::move(req_copy), method_str, payload_str, ctx, shaping]
-        (std::shared_ptr<HttpConnection> conn,
-         std::vector<PgResult> results) mutable {
+    //
+    // Not exec_sql(): its error handler answers with the v1 body
+    // {"error":{"code":500,…}} on its own, and a failed statement or a lost
+    // connection reaches that handler, not the result one — so a derived
+    // module (GatewayAPI: problem+json on /api/v2/*) could not shape it. The
+    // error goes through reply_refused() like every other refusal of this
+    // branch; the base gives the same v1 500 as before (GWA.DEV.10).
+    resp.set_deferred(true);
+    auto conn = std::static_pointer_cast<HttpConnection>(req.connection_ctx);
+    auto path = req.path;
+
+    pool_.execute(std::move(refresh_sql),
+        [this, conn, req_copy = std::move(req_copy), method_str, payload_str, ctx, shaping]
+        (std::vector<PgResult> results) mutable {
 
             HttpResponse r;
             r.set_header("Content-Type", "application/json");
@@ -845,6 +854,11 @@ void AppServer::token_refresh_and_fetch(const HttpRequest& req, HttpResponse& re
                 reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {}, msg, {}, req_copy.path});
                 conn->send_response(r);
             }
+        },
+        [this, conn, path](std::string_view error) {
+            HttpResponse r;
+            reply_refused(r, {Refusal::Kind::internal, HttpStatus::internal_server_error, {}, error, {}, path});
+            conn->send_response(r);
         },
         /*quiet=*/true);
 }
