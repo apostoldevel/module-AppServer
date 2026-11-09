@@ -173,7 +173,7 @@ The full set of application endpoints is therefore defined entirely in the proje
 
 - The token is minted on the heartbeat; until then (the first second of a worker) a guest route answers `503` with `Retry-After: 1`.
 - Every guest shares **one** service session per worker. If the database closes it (a rate limiter that signs the calling session out, for example), the request answers `503` `Retry-After: 1` and the next heartbeat mints a new one. Limits meant per client have to key on the client's address, not on the session.
-- `daemon.fetch` does not consult the blacklist that `daemon.unauthorized_fetch` does: a route put in this list bypasses it.
+- Put a path here only if it is meant to be open to guests: it is executed by `daemon.fetch`, and the route blacklist that `daemon.unauthorized_fetch` reads (`CONFIG\CurrentProject\API\Route`, value `Blacklist`) is not applied to it.
 
 ### Reusing the authorisation with another execution step
 
