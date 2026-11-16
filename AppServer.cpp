@@ -30,6 +30,12 @@ static constexpr const char* kCookieSRT = "__Secure-SRT";
 static constexpr const char* kCookieSID = "__Host-SID";
 static constexpr int kCookieMaxAge      = 60 * 86400; // 60 days
 
+// A value with a NUL byte cannot be passed on inside the statement text.
+static bool has_nul(std::string_view s)
+{
+    return s.find('\0') != std::string_view::npos;
+}
+
 // ─── Response shaping parameters ───────────────────────────────────────────
 //
 // Optional query parameters that control how PostgreSQL results are serialised:
@@ -591,6 +597,26 @@ void AppServer::execute(const HttpRequest& req, std::shared_ptr<HttpConnection> 
                         const ExecContext& ctx, std::string_view method,
                         const std::string& payload, const ResultShaping& shaping)
 {
+    // The statement is sent as text, and the server reads it up to the first
+    // NUL byte: a value carrying one would arrive cut short and be refused
+    // as a syntax error — a 500 for input that is the client's to fix. A raw
+    // NUL byte gets this far in two ways: inside an application/json body,
+    // which is passed on unparsed, and inside Basic credentials once decoded
+    // from base64. The header parser refuses one in the path and the headers.
+    // A form body is re-serialised as JSON and carries the escape \u0000
+    // instead of the byte: that statement arrives whole and is not this check.
+    // A refreshed context keeps its new cookies: the old refresh token has
+    // been spent.
+    if (has_nul(payload) || has_nul(ctx.auth.username) ||
+        has_nul(ctx.auth.password) || has_nul(ctx.auth.token)) {
+        HttpResponse r;
+        reply_refused(r, {Refusal::Kind::malformed, HttpStatus::bad_request, {},
+                          "The request contains a NUL byte.", {}, req.path});
+        apply_refresh_cookies(r, ctx);
+        conn->send_response(r);
+        return;
+    }
+
     auto method_q  = pq_quote_literal(method);
     auto path_q    = pq_quote_literal(req.path);
     auto payload_q = payload.empty() ? std::string("null")

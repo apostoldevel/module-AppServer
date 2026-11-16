@@ -150,6 +150,7 @@ protected:
                              // overrides of reply_refused that name it
             database,        // the database refused and its payload (body) says why
             internal,        // this side broke: a failed statement, an unparsable answer
+            malformed,       // the client's input cannot be passed on as it is (400)
         };
         Kind             kind;
         HttpStatus       status;
